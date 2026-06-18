@@ -34,3 +34,8 @@ source = ["src/mdnotes"]
 
 [tool.coverage.report]
 show_missing = true
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.17",
+]

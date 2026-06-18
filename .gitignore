@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Node (如用 JS/TS)
+node_modules/
+.npm/
+.yarn/
+dist/
+.next/
+
+# Rust (如用 Rust)
+target/
+Cargo.lock
+
+# v0.2 框架：任务级产物不入 git
+.tasks/
+archive/
+
+# v0.2 框架：项目 metadata
+.openclaw/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# 环境
+.env
+.env.local
+*.local
+
+# 日志
+*.log
+logs/

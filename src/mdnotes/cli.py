@@ -1,6 +1,5 @@
 """mdnotes CLI - Click-based command interface."""
 
-import sys
 from typing import Optional
 
 import click
