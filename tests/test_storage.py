@@ -139,7 +139,7 @@ class TestStorageListNotes:
 
     def test_list_notes_default_sort_desc(self):
         """AC-9: default sort is created_at DESC (newest first)."""
-        id1 = storage.add_note("First", "")
+        _ = storage.add_note("First", "")
         import time
         time.sleep(1.1)  # ensure different created_at second
         id2 = storage.add_note("Second", "")
@@ -152,7 +152,7 @@ class TestStorageListNotes:
         id1 = storage.add_note("A", "")
         import time
         time.sleep(0.01)
-        id2 = storage.add_note("B", "")
+        _ = storage.add_note("B", "")
         notes = storage.list_notes(sort="updated_at", order="asc")
         assert notes[0]["id"] == id1
 
