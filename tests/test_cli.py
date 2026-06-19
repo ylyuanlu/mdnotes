@@ -4,7 +4,7 @@ import os
 import tempfile
 import pytest
 from click.testing import CliRunner
-from mdnotes.cli import cli, add, list, show, delete
+from mdnotes.cli import cli, add, list, show, delete, count
 
 
 @pytest.fixture
@@ -225,6 +225,52 @@ class TestDeleteCommand:
         runner, env = isolated_db
         result = runner.invoke(delete, ["--help"])
         assert result.exit_code == 0
+
+
+class TestCountCommand:
+    """Tests for: mdnotes count"""
+
+    def test_count_empty_returns_zero(self, isolated_db):
+        """B-1/B-4: empty DB outputs 'Total notes: 0', exit 0."""
+        runner, env = isolated_db
+        result = runner.invoke(count, [], env=env)
+        assert result.exit_code == 0
+        assert "Total notes: 0" in result.output
+
+    def test_count_after_add_one(self, isolated_db):
+        """B-2: one note outputs 'Total notes: 1', exit 0."""
+        runner, env = isolated_db
+        runner.invoke(add, ["First Note"], env=env)
+        result = runner.invoke(count, [], env=env)
+        assert result.exit_code == 0
+        assert "Total notes: 1" in result.output
+
+    def test_count_after_add_multiple(self, isolated_db):
+        """B-2: multiple notes outputs correct count, exit 0."""
+        runner, env = isolated_db
+        runner.invoke(add, ["Note A"], env=env)
+        runner.invoke(add, ["Note B"], env=env)
+        runner.invoke(add, ["Note C"], env=env)
+        result = runner.invoke(count, [], env=env)
+        assert result.exit_code == 0
+        assert "Total notes: 3" in result.output
+
+    def test_count_after_delete(self, isolated_db):
+        """B-5: deleted notes are not counted."""
+        runner, env = isolated_db
+        runner.invoke(add, ["Note 1"], env=env)
+        runner.invoke(add, ["Note 2"], env=env)
+        runner.invoke(delete, ["1", "--force"], env=env)
+        result = runner.invoke(count, [], env=env)
+        assert result.exit_code == 0
+        assert "Total notes: 1" in result.output
+
+    def test_count_help(self, isolated_db):
+        """B-3: --help shows usage, exit 0."""
+        runner, env = isolated_db
+        result = runner.invoke(count, ["--help"])
+        assert result.exit_code == 0
+        assert "Count all active notes" in result.output
 
 
 class TestCliVersion:

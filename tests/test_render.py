@@ -1,6 +1,5 @@
 """Tests for mdnotes.render module."""
 
-import pytest
 from mdnotes.render import render_md
 
 

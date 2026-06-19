@@ -22,11 +22,11 @@ dist/
 target/
 Cargo.lock
 
-# v0.2 框架：任务级产物不入 git
+# v0.1 框架：任务级产物不入 git
 .tasks/
 archive/
 
-# v0.2 框架：项目 metadata
+# v0.1 框架：项目 metadata
 .openclaw/
 
 # IDE

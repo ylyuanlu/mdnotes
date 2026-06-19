@@ -255,6 +255,43 @@ def delete_note(note_id: int, force: bool = False) -> None:
         raise DatabaseError(f"Database error: {e}") from e
 
 
+def count_notes() -> int:
+    """
+    Return the number of active (non-deleted) notes.
+
+    Active notes are those with deleted_at IS NULL.
+    On first call, performs lazy migration to add the deleted_at column.
+
+    Returns:
+        Non-negative integer count of active notes
+
+    Raises:
+        DatabaseError: On SQLite error
+    """
+    db_path = _get_db_path()
+
+    @_retry_on_lock
+    def _count():
+        conn = _get_connection(db_path)
+        try:
+            # Lazy migration: ensure deleted_at column exists (idempotent)
+            try:
+                conn.execute("ALTER TABLE notes ADD COLUMN deleted_at TEXT")
+            except sqlite3.OperationalError:
+                pass  # column already exists
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM notes WHERE deleted_at IS NULL"
+            )
+            return cursor.fetchone()[0]
+        finally:
+            conn.close()
+
+    try:
+        return _count()
+    except sqlite3.Error as e:
+        raise DatabaseError(f"Database error: {e}") from e
+
+
 def _check_integrity(conn: sqlite3.Connection) -> None:
     """
     Run PRAGMA integrity_check and raise DatabaseError on corruption.
