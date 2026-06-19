@@ -177,5 +177,22 @@ def delete(id: str, force: bool):
     raise SystemExit(0)
 
 
+@cli.command()
+def count():
+    """Count all active notes.
+
+    Prints the total number of active (non-deleted) notes.
+    Automatically initializes the database if it does not exist.
+    """
+    try:
+        n = storage.count_notes()
+    except storage.DatabaseError as e:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1)
+
+    click.echo(f"Total notes: {n}")
+    raise SystemExit(0)
+
+
 if __name__ == "__main__":
     cli()

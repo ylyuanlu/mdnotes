@@ -233,3 +233,41 @@ class TestStorageDatabaseError:
             del os.environ["MDNOTES_DB"]
         import shutil
         shutil.rmtree(self._temp_dir, ignore_errors=True)
+
+
+class TestStorageCountNotes:
+    """count_notes() behavior."""
+
+    def setup_method(self):
+        self._temp_dir = tempfile.mkdtemp()
+        self._temp_db = os.path.join(self._temp_dir, "notes.db")
+        os.environ["MDNOTES_DB"] = self._temp_db
+
+    def teardown_method(self):
+        if "MDNOTES_DB" in os.environ:
+            del os.environ["MDNOTES_DB"]
+        import shutil
+        shutil.rmtree(self._temp_dir, ignore_errors=True)
+
+    def test_count_notes_empty_returns_zero(self):
+        """Empty DB returns 0."""
+        assert storage.count_notes() == 0
+
+    def test_count_notes_after_add(self):
+        """After adding N notes, count returns N."""
+        storage.add_note("Note 1", "")
+        storage.add_note("Note 2", "")
+        storage.add_note("Note 3", "")
+        assert storage.count_notes() == 3
+
+    def test_count_notes_after_delete(self):
+        """Deleted notes are not counted (soft-delete semantics)."""
+        id1 = storage.add_note("Will be deleted", "")
+        id2 = storage.add_note("Will stay", "")
+        storage.delete_note(id1)
+        # delete_note is physical delete, so deleted note is gone
+        assert storage.count_notes() == 1
+        # Verify the remaining note is id2
+        notes = storage.list_notes()
+        assert len(notes) == 1
+        assert notes[0]["id"] == id2
