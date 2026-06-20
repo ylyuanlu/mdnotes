@@ -81,19 +81,29 @@ def _add_single_file(file_path: Path) -> int:
     if not note_title:
         note_title = file_path.stem  # fallback to filename without .md
 
-    # Index tags from the file
+    abs_path = str(file_path.resolve())
+
+    # Index tags from the file (updates tags table + returns found tags)
     try:
-        storage.scan_and_index_file(str(file_path.resolve()))
+        found_tags = storage.scan_and_index_file(abs_path)
     except storage.DatabaseError as e:
         raise SystemError(str(e))
 
-    # Create note with file content
+    # Create note with file content + file_path for FTS5 tag JOIN
     try:
-        note_id = storage.add_note(note_title, file_content)
+        note_id = storage.add_note(note_title, file_content, file_path=abs_path)
     except ValueError as e:
         raise ParamError(str(e))
     except storage.DatabaseError as e:
         raise SystemError(str(e))
+
+    # Sync denormalized tags string to notes table → FTS5 UPDATE trigger fires
+    if found_tags:
+        tags_string = ",".join(sorted(found_tags))
+        try:
+            storage.set_note_tags(note_id, tags_string)
+        except storage.DatabaseError as e:
+            raise SystemError(str(e))
 
     return note_id
 
@@ -531,6 +541,150 @@ def _build_tag_pattern(tag: str) -> re.Pattern:
         r"(?<![a-zA-Z0-9])#" + escaped + r"\b",
         flags=re.MULTILINE,
     )
+
+
+# -----------------------------------------------------------------------
+# search command
+# -----------------------------------------------------------------------
+
+def _escape_fts5_special_char(token: str) -> str:
+    """
+    Escape FTS5 special characters in a token by wrapping in double quotes.
+
+    FTS5 special characters: & | - ( ) " *
+    Wrapping in "..." makes them literal text.
+    """
+    FTS5_SPECIAL = '&|-"()*'
+    if any(c in token for c in FTS5_SPECIAL):
+        # Escape each special char by wrapping token in double quotes
+        # Double-quote the token (FTS5 literal string)
+        return '"' + token + '"'
+    return token
+
+
+def _preprocess_query(raw_query: str) -> str:
+    """
+    Convert user query to FTS5 syntax.
+
+    Unquoted → OR semantics (Google-style).
+    Quoted ("...") → AND semantics.
+    Special FTS5 chars (& | - " * etc.) are escaped so they're treated as
+    literal text rather than FTS5 operators.
+    """
+    raw = raw_query.strip()
+    if not raw:
+        return raw
+    # Detect quoted phrase: entire query wrapped in double quotes
+    if raw.startswith('"') and raw.endswith('"') and len(raw) > 2:
+        # Strip quotes → FTS5 AND semantics (inner content)
+        return raw[1:-1]
+    # Unquoted: split on whitespace → OR
+    # Escape FTS5 special chars in each token so they're literal
+    tokens = raw.split()
+    escaped = [_escape_fts5_special_char(t) for t in tokens]
+    return " ".join(escaped)
+
+
+@cli.command()
+@click.argument("query", required=False)
+@click.option("--tag", "tag_filter", default=None, help="Filter by tag name")
+@click.option("--limit", default=20, help="Max results (default 20)")
+def search(query: Optional[str], tag_filter: Optional[str], limit: int):
+    """
+    Search notes by keyword using FTS5 full-text index.
+
+    QUERY is the search phrase. Without quotes, uses OR semantics
+    (e.g. "python redis" finds notes with python OR redis).
+    With quotes, uses AND semantics ("python redis" finds both).
+
+    Exit codes:
+      0 = results found
+      1 = no results
+      2 = error (missing query, FTS5 unavailable, etc.)
+
+    Examples:
+      mdnotes search python
+      mdnotes search "python redis"
+      mdnotes search --tag v1
+    """
+    # Check FTS5 availability first
+    if not storage._fts5_available():
+        click.echo("Error: FTS5 is not available in this SQLite installation.", err=True)
+        raise SystemExit(2)
+
+    if not query or not query.strip():
+        click.echo("Error: missing query argument.", err=True)
+        click.echo("Usage: mdnotes search <query>", err=True)
+        raise SystemExit(2)
+
+    processed = _preprocess_query(query)
+
+    try:
+        storage.ensure_fts5()
+    except storage.DatabaseError as e:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(2)
+
+    try:
+        results = storage.search_notes(processed, tag=tag_filter, limit=limit)
+    except storage.DatabaseError as e:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(2)
+
+    if not results:
+        click.echo("No results found.", err=True)
+        raise SystemExit(1)
+
+    # Display results (table format)
+    for r in results:
+        snippet = r["snippet"] or ""
+        tags_str = r["tags"] or ""
+        # Determine file path display
+        file_path = ""
+        if r.get("file_path"):
+            fp = r["file_path"]
+            if " " in fp:
+                file_path = f'"{fp}"'
+            else:
+                file_path = fp
+        click.echo(f"{file_path}: {r['title']}")
+        if snippet:
+            click.echo(f"  {snippet}")
+        if tags_str:
+            click.echo(f"  tags: {tags_str}")
+
+    raise SystemExit(0)
+
+
+# -----------------------------------------------------------------------
+# reindex command
+# -----------------------------------------------------------------------
+
+@cli.command()
+@click.confirmation_option(prompt="Rebuild FTS5 index from scratch? ")
+def reindex():
+    """
+    Rebuild the FTS5 full-text search index.
+
+    Drops and recreates the notes_fts virtual table, then re-indexes
+    all existing notes. Run this if search results seem out of sync.
+
+    Examples:
+      mdnotes reindex
+    """
+    if not storage._fts5_available():
+        click.echo("Error: FTS5 is not available.", err=True)
+        raise SystemExit(2)
+
+    try:
+        storage.ensure_fts5()
+        storage.rebuild_fts5()
+    except storage.DatabaseError as e:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(2)
+
+    click.echo("FTS5 index rebuilt successfully.")
+    raise SystemExit(0)
 
 
 if __name__ == "__main__":
