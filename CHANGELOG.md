@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v0.1.0] — 2026-06-20
+
+### Added
+- **`tag rename` CLI**: `mdnotes tag rename <old> <new>` 支持 dry-run / --force / --ignore-missing / --glob / --exclude
+- **Storage `rename_tag_in_file`**: 同时改 frontmatter YAML `tags:` 和 inline `#tag`
+- **Storage `scan_and_index_file` add 时索引**: frontmatter + inline tag 双索引
+- **CLI `add` 多文件支持**: `mdnotes add file1.md file2.md` (nargs='+')
+- **CLI `list` → `ls`**: 避开 Python builtin shadowing (`list` keyword)
+- **132 tests**: unit + multi-file 集成 + 边界覆盖
+
+### Technical Decisions
+- ADR-0001: dry-run MVP simplified rollback boundary preflight
+- ADR-0002: rollback boundary preflight（CLI 层校验 before storage 层执行）
+
+### Test Coverage
+- 132 tests pass（task 3 v2 第 6 次尝试通过）
+- Ruff: zero errors
+
 ## [v0.1.0-mvp] — 2026-06-18
 
 ### Added
@@ -38,26 +56,26 @@ All notable changes to this project will be documented in this file.
 - Coverage: 80% (硬门禁)
 - Ruff: 全绿
 
-## [v1.0] — 2026-06-20
+## [v0.5-stage-close] — 2026-06-20
 
-### 🎉 工作流方案正式发布（v0.5 阶段收尾 → v1.0）
+### v0.5 阶段收尾工作（在 main 上落地）
 
-**v0.5 阶段收尾 = 工作流方案成熟 = 正式发布为 v1.0**
+**v0.5 阶段 = 工作流方案验证阶段，正在收尾**（不是封版，是 v0.5 阶段工作落到 main 上）
 
-### mdnotes 项目版本
+### mdnotes 项目版本（验证载体）
 - 主分支合并 feature/v0.1.1（count sub-command）
 - 当前 main HEAD：v0.1.1（含 70 tests + 80% coverage + ruff 全绿）
-- tag v0.1.0-mvp + v0.1.1（项目内 release tag）
+- 项目内 tag：v0.1.0-mvp + v0.1.1（mdnotes 项目自身 release tag）
 
-### v0.5 阶段完成里程碑
-- ✅ 软强制层（sub-agent 框架）
-- ✅ 8 状态机（debating → done + 6 failed 子状态）
-- ✅ 6 gate 验证（task-status / status-transition / review-report / test-report × schema + critical + coverage）
-- ✅ 决策 5 重新定义（飞书多 bot outbound 弃用）
-- ✅ 验证载体 mdnotes：task 1 + task 2 端到端跑通
-- ✅ merge feature/v0.1.1 → main
+### v0.5 阶段里程碑（在 main 上的产物）
+- 软强制层（sub-agent 框架）
+- 8 状态机（debating → done + 6 failed 子状态）
+- 6 gate 验证（task-status / status-transition / review-report / test-report × schema + critical + coverage）
+- 决策 5 重新定义（飞书多 bot outbound 弃用）
+- 验证载体 mdnotes：task 1 + task 2 端到端跑通
+- merge feature/v0.1.1 → main
 
-### 工作流框架（v1.0）
+### 工作流框架（v0.5 阶段当前状态）
 - 6 role agent：main / pm / architect / dev / reviewer / qa / devops
 - 4 debate sub-agent：product-champion / tech-reviewer / devil-advocate / quality-gatekeeper
 - 4 个 6 gate 验证脚本：兼容 `## field` 标题 + `field:` 单行两种格式
@@ -69,7 +87,10 @@ All notable changes to this project will be documented in this file.
 - 11 个 bot app + 11 个 bindings（main/pm/architect/dev/reviewer/qa/devops/sre/content/support）
 - 决策 5 重新定义：bot 基础设施就位（不指望 sub-agent / agent 顶级 session 自动 outbound）
 
-### 下一步（独立动作，跟 v1.0 无关）
-- mdnotes task 3（v0.2 soft-delete）= mdnotes 项目自己的下一步动作
-- 这是 mdnotes 项目层动作，不是框架层动作
-- 框架层 v1.0 已正式发布
+### v0.5 阶段收尾 = 进入 v1.0 阶段的实施方案
+- v0.5 阶段还在进行中（"0.5 不是刚要完成吗"）
+- v0.5 阶段收尾 = 为 v1.0 阶段准备实施方案（不是发布 v1.0，不是封版 v0.5）
+- v1.0 阶段 = v0.5 收尾后的下一阶段（实施方案待主公定稿）
+
+### 下一步（独立动作）
+- mdnotes task 3（v0.2 soft-delete）= mdnotes 项目自己的下一步动作（项目层，不是框架层）
