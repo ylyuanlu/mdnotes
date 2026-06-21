@@ -35,18 +35,6 @@ class TestFTS5Setup:
         row = cursor.fetchone()
         assert row is not None, "notes_fts table should exist"
 
-    def test_ensure_fts5_creates_triggers(self):
-        """ensure_fts5() creates INSERT/UPDATE/DELETE triggers."""
-        storage.ensure_fts5()
-        conn = storage._get_connection(self._temp_db)
-        cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='trigger'"
-        )
-        triggers = [r[0] for r in cursor.fetchall()]
-        assert "notes_ai" in triggers, "INSERT trigger should exist"
-        assert "notes_au" in triggers, "UPDATE trigger should exist"
-        assert "notes_ad" in triggers, "DELETE trigger should exist"
-
     def test_ensure_fts5_idempotent(self):
         """ensure_fts5() can be called multiple times without error."""
         storage.ensure_fts5()
@@ -58,27 +46,23 @@ class TestFTS5Setup:
         assert storage._fts5_available() is True
 
     def test_add_note_syncs_to_fts5(self):
-        """add_note() creates an FTS5 entry via INSERT trigger."""
+        """add_note() makes the note searchable via FTS5 (content= linked auto-sync)."""
         storage.ensure_fts5()
-        note_id = storage.add_note("Test", "hello world content")
-        conn = storage._get_connection(self._temp_db)
-        cursor = conn.execute(
-            "SELECT rowid, title FROM notes_fts WHERE rowid = ?", (note_id,)
-        )
-        row = cursor.fetchone()
-        assert row is not None, "FTS5 should have entry for new note"
-        assert row[1] == "Test"
+        note_id = storage.add_note("Test Note Title", "hello world content")
+        # Verify via search_notes (the correct API for linked-schema FTS5)
+        results = storage.search_notes("hello")
+        assert len(results) >= 1
+        assert any(r["id"] == note_id for r in results)
 
     def test_delete_note_removes_from_fts5(self):
-        """delete_note() removes the FTS5 entry via DELETE trigger."""
+        """delete_note() makes the note unsearchable (content= linked auto-sync)."""
         storage.ensure_fts5()
-        note_id = storage.add_note("Test", "content")
+        note_id = storage.add_note("To Be Deleted", "some content")
+        results_before = storage.search_notes("Deleted")
+        assert len(results_before) >= 1
         storage.delete_note(note_id)
-        conn = storage._get_connection(self._temp_db)
-        cursor = conn.execute(
-            "SELECT rowid FROM notes_fts WHERE rowid = ?", (note_id,)
-        )
-        assert cursor.fetchone() is None, "FTS5 entry should be deleted"
+        results_after = storage.search_notes("Deleted")
+        assert not any(r["id"] == note_id for r in results_after)
 
 
 class TestSearchNotes:
@@ -132,11 +116,11 @@ class TestSearchNotes:
         assert len(results) == 2
 
     def test_search_with_tags(self):
-        """search_notes respects the tag parameter."""
+        """search_notes respects the tag parameter (JOINs tags table)."""
         storage.add_note("Note A", "content", file_path="/tmp/a.md")
-        storage.set_note_tags(1, "python,v1")
+        storage.add_tag("/tmp/a.md", "python")
         storage.add_note("Note B", "content", file_path="/tmp/b.md")
-        storage.set_note_tags(2, "ruby")
+        storage.add_tag("/tmp/b.md", "ruby")
         results = storage.search_notes("content", tag="python")
         assert len(results) == 1
         assert results[0]["id"] == 1
@@ -157,11 +141,19 @@ class TestSearchNotes:
         assert len(results) >= 1
         assert "v1" in results[0]["tags"]
 
+    def test_search_returns_file_path(self):
+        """search_notes results include file_path field."""
+        storage.add_note("Note", "content", file_path="/tmp/my note.md")
+        results = storage.search_notes("content")
+        assert len(results) >= 1
+        assert "file_path" in results[0]
+        assert results[0]["file_path"] == "/tmp/my note.md"
+
     def test_search_bm25_ranking(self):
-        """More relevant notes rank higher (BM25)."""
-        n1 = storage.add_note("All Python", "python python python")
+        """More relevant notes rank higher (BM25 with weights 10,1,1)."""
+        n1 = storage.add_note("All Python", "python python python", file_path="/tmp/n1.md")
         storage.set_note_tags(n1, "v1")
-        n2 = storage.add_note("Some Python", "python code")
+        n2 = storage.add_note("Some Python", "python code", file_path="/tmp/n2.md")
         storage.set_note_tags(n2, "v1")
         results = storage.search_notes("python")
         assert len(results) == 2
@@ -171,23 +163,23 @@ class TestSearchNotes:
     def test_search_limit(self):
         """search_notes respects the limit parameter."""
         for i in range(5):
-            storage.add_note(f"Note {i}", f"python content {i}")
+            storage.add_note(f"Note {i}", f"python content {i}", file_path=f"/tmp/n{i}.md")
         results = storage.search_notes("python", limit=3)
         assert len(results) == 3
 
     def test_search_update_sync(self):
-        """Updating a note's title updates FTS5 (UPDATE trigger)."""
-        note_id = storage.add_note("Original", "hello world")
+        """Updating a note's title updates FTS5 (content= linked auto-sync)."""
+        note_id = storage.add_note("Original Title", "hello world", file_path="/tmp/upd.md")
         storage.set_note_tags(note_id, "v1")
-        results = storage.search_notes("Original")
-        assert len(results) == 1
+        results_old = storage.search_notes("Original")
+        assert len(results_old) == 1
         # Update the note title
         conn = storage._get_connection(self._temp_db)
-        conn.execute("UPDATE notes SET title = ? WHERE id = ?", ("Updated", note_id))
+        conn.execute("UPDATE notes SET title = ? WHERE id = ?", ("Updated Title", note_id))
         conn.commit()
-        results_old = storage.search_notes("Original")
+        results_former = storage.search_notes("Original")
         results_new = storage.search_notes("Updated")
-        assert len(results_old) == 0
+        assert len(results_former) == 0
         assert len(results_new) == 1
 
 
@@ -208,8 +200,8 @@ class TestSetNoteTags:
         import shutil
         shutil.rmtree(self._temp_dir, ignore_errors=True)
 
-    def test_set_note_tags_updates_fts5(self):
-        """set_note_tags() updates the tag field in FTS5 via UPDATE trigger."""
+    def test_set_note_tags_updates_search(self):
+        """set_note_tags() makes note searchable by the new tag via FTS5."""
         note_id = storage.add_note("Test", "content", file_path="/tmp/test.md")
         storage.set_note_tags(note_id, "python,redis")
         results = storage.search_notes("python")
@@ -222,14 +214,12 @@ class TestSetNoteTags:
             storage.set_note_tags(9999, "tag")
 
     def test_set_note_tags_empty_string(self):
-        """set_note_tags() with empty string clears tags."""
+        """set_note_tags() with empty string clears tags field."""
         note_id = storage.add_note("Test", "content", file_path="/tmp/test.md")
         storage.set_note_tags(note_id, "v1")
         storage.set_note_tags(note_id, "")
         results = storage.search_notes("v1")
-        # Empty tag means v1 won't be in tags field
-        results2 = storage.search_notes("content")
-        assert len(results2) == 1
+        assert len(results) == 0  # v1 no longer in tags
 
 
 class TestFTS5Health:

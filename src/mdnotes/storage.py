@@ -20,13 +20,14 @@ CREATE TABLE IF NOT EXISTS notes (
 """
 
 # FTS5 virtual table (stand-alone, not content= linked to notes)
-# title + content + tag stored directly in FTS5 table
+# title + content + tag stored directly in FTS5 table.
+# Sync maintained via manual triggers on notes CRUD.
 ENSURE_FTS5_SQL = """
 CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
     title,
     content,
     tag,
-    tokenize='porter unicode61'
+    tokenize='unicode61'
 );
 """
 
@@ -983,7 +984,7 @@ def set_note_tags(note_id: int, tags_string: str) -> None:
 def search_notes(
     query: str,
     tag: Optional[str] = None,
-    limit: int = 20,
+    limit: int = 100,
 ) -> list[dict[str, Any]]:
     """
     Search notes using FTS5 full-text index.
@@ -991,18 +992,17 @@ def search_notes(
     Args:
         query: FTS5 query string. Unquoted → OR semantics, quoted → AND semantics.
                Special chars & | - " * are passed as-is (FTS5 handles them).
-        tag: If provided, filter to notes with this exact tag_name.
-        limit: Maximum number of results to return.
+        tag: If provided, filter to notes with this exact tag_name via JOIN on tags table.
+        limit: Maximum number of results to return (default 100).
 
     Returns:
-        List of dicts with keys: id, title, content, tags, snippet, score, rank.
+        List of dicts with keys: id, title, content, tags, snippet, score, file_path.
         Empty list if no results.
 
     Raises:
         DatabaseError: On FTS5 errors
     """
     if not query or not query.strip():
-        # If no query but tag filter is provided, search only by tag column
         if not tag:
             return []
         query = ""
@@ -1015,25 +1015,30 @@ def search_notes(
         conn = _get_connection(db_path)
         try:
             if tag:
-                # Search FTS5 tag column directly (denormalized, always in sync)
-                # FTS5 query syntax: tag:python searches only the tag column
-                fts5_query = f"{query} tag:{tag}"
+                # JOIN tags table for exact tag_name match (per spec)
+                # FTS5 query is the user query; tags table does exact filter
+                fts5_query = query if query else "*"
                 sql = """
                 SELECT n.id, n.title, n.content, n.tags,
-                       snippet(notes_fts, 1, '<mark>', '</mark>', '…', 32) AS snippet,
-                       bm25(notes_fts) AS score
+                       snippet(notes_fts, 1, '<mark>', '</mark>', '...', 32) AS snippet,
+                       bm25(notes_fts, 10.0, 1.0, 1.0) AS score,
+                       n.file_path
                 FROM notes n
                 JOIN notes_fts f ON n.id = f.rowid
+                JOIN tags t ON t.file_path = n.file_path
                 WHERE notes_fts MATCH ?
+                  AND t.tag_name = ?
+                  AND t.deleted_at IS NULL
                 ORDER BY score
                 LIMIT ?
                 """
-                cursor = conn.execute(sql, (fts5_query, limit))
+                cursor = conn.execute(sql, (fts5_query, tag, limit))
             else:
                 sql = """
                 SELECT n.id, n.title, n.content, n.tags,
-                       snippet(notes_fts, 1, '<mark>', '</mark>', '…', 32) AS snippet,
-                       bm25(notes_fts) AS score
+                       snippet(notes_fts, 1, '<mark>', '</mark>', '...', 32) AS snippet,
+                       bm25(notes_fts, 10.0, 1.0, 1.0) AS score,
+                       n.file_path
                 FROM notes n
                 JOIN notes_fts f ON n.id = f.rowid
                 WHERE notes_fts MATCH ?
@@ -1052,6 +1057,7 @@ def search_notes(
                     "tags": row[3] or "",
                     "snippet": row[4] or "",
                     "score": row[5],
+                    "file_path": row[6] or "",
                 })
             return results
         finally:
@@ -1115,10 +1121,11 @@ def rebuild_fts5() -> None:
     def _rebuild():
         conn = _get_connection(db_path)
         try:
-            # Drop existing FTS5 objects
+            # Drop existing FTS5 triggers first
             conn.execute("DROP TRIGGER IF EXISTS notes_ai")
             conn.execute("DROP TRIGGER IF EXISTS notes_au")
             conn.execute("DROP TRIGGER IF EXISTS notes_ad")
+            # Drop existing FTS5 virtual table
             conn.execute("DROP TABLE IF EXISTS notes_fts")
             conn.commit()
 

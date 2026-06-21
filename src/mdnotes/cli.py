@@ -587,9 +587,11 @@ def _preprocess_query(raw_query: str) -> str:
 
 @cli.command()
 @click.argument("query", required=False)
-@click.option("--tag", "tag_filter", default=None, help="Filter by tag name")
-@click.option("--limit", default=20, help="Max results (default 20)")
-def search(query: Optional[str], tag_filter: Optional[str], limit: int):
+@click.option("--tag", "tag_filter", default=None, help="Filter by tag name (JOINs tags table)")
+@click.option("--limit", default=100, help="Max results (default 100)")
+@click.option("--check", "check_flag", is_flag=True, help="Check FTS5 index health")
+@click.option("--rebuild", "rebuild_flag", is_flag=True, help="Rebuild FTS5 index from notes table")
+def search(query: Optional[str], tag_filter: Optional[str], limit: int, check_flag: bool, rebuild_flag: bool):
     """
     Search notes by keyword using FTS5 full-text index.
 
@@ -598,7 +600,7 @@ def search(query: Optional[str], tag_filter: Optional[str], limit: int):
     With quotes, uses AND semantics ("python redis" finds both).
 
     Exit codes:
-      0 = results found
+      0 = results found (or --check/--rebuild succeeded)
       1 = no results
       2 = error (missing query, FTS5 unavailable, etc.)
 
@@ -606,12 +608,50 @@ def search(query: Optional[str], tag_filter: Optional[str], limit: int):
       mdnotes search python
       mdnotes search "python redis"
       mdnotes search --tag v1
+      mdnotes search --check
+      mdnotes search --rebuild
     """
     # Check FTS5 availability first
     if not storage._fts5_available():
         click.echo("Error: FTS5 is not available in this SQLite installation.", err=True)
         raise SystemExit(2)
 
+    # --check: run health check (no query needed)
+    if check_flag:
+        try:
+            storage.ensure_fts5()
+        except storage.DatabaseError as e:
+            click.echo(f"Error: {e}", err=True)
+            raise SystemExit(2)
+        try:
+            health = storage.check_fts5_health()
+        except storage.DatabaseError as e:
+            click.echo(f"Error: {e}", err=True)
+            raise SystemExit(2)
+        consistent = health.get("consistent", False)
+        orphaned = health.get("orphaned", 0)
+        extra = health.get("extra", 0)
+        if consistent:
+            click.echo("FTS5 index is consistent.")
+        else:
+            click.echo("FTS5 index inconsistency detected:", err=True)
+            click.echo(f"  orphaned FTS5 rows (no matching note): {orphaned}", err=True)
+            click.echo(f"  notes without FTS5 entry: {extra}", err=True)
+            click.echo("Run 'mdnotes search --rebuild' to fix.", err=True)
+        raise SystemExit(0)
+
+    # --rebuild: rebuild index (no query needed)
+    if rebuild_flag:
+        try:
+            storage.ensure_fts5()
+            storage.rebuild_fts5()
+        except storage.DatabaseError as e:
+            click.echo(f"Error: {e}", err=True)
+            raise SystemExit(2)
+        click.echo("FTS5 index rebuilt successfully.")
+        raise SystemExit(0)
+
+    # Normal search path
     if not query or not query.strip():
         click.echo("Error: missing query argument.", err=True)
         click.echo("Usage: mdnotes search <query>", err=True)
@@ -635,11 +675,10 @@ def search(query: Optional[str], tag_filter: Optional[str], limit: int):
         click.echo("No results found.", err=True)
         raise SystemExit(1)
 
-    # Display results (table format)
+    # Display results
     for r in results:
         snippet = r["snippet"] or ""
         tags_str = r["tags"] or ""
-        # Determine file path display
         file_path = ""
         if r.get("file_path"):
             fp = r["file_path"]
