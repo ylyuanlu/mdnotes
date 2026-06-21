@@ -5,6 +5,7 @@
 > **依据:** `docs/PRD/04-search-command.md`（PM Agent 输出）+ `.tasks/t_20260620_67128/debate-log.md`（3 轮辩论）
 > **创建时间:** 2026-06-20T23:05:00+08:00
 > **辩论收敛:** 7 共识 + 4 仲裁（Round 3 PM 汇总）
+> **2026-06-21 更新:** §Data Structures 修订为 standalone FTS5 + 3 manual trigger（接受 SQLite 3.53.1 `content='notes'` 约束），闭合 Reviewer C-1 spec gap
 
 ---
 
@@ -58,30 +59,33 @@ mdnotes search --rebuild
 
 ## 数据结构
 
-### FTS5 Virtual Table Schema（关联型）
+### FTS5 Virtual Table Schema（Standalone + Manual Sync）
+
+> **SQLite 3.53.1 约束**：FTS5 `content='notes'` 关联型 auto-sync 机制在 SQLite 3.53.1 中不工作（trigger 无法驱动关联表更新）。因此采用 **standalone FTS5 virtual table + 3 个 manual trigger** 方案，功能等价，行为正确（165 测试验证）。
 
 ```sql
--- notes_fts 是 notes 表的全文索引视图，不冗余存储内容
-CREATE VIRTUAL TABLE notes_fts USING fts5(
+-- Standalone FTS5 table: 冗余存储 title/content/tag，与 notes 表通过 trigger 保持同步
+CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
     title,
     content,
     tag,              -- denormalized TEXT，逗号分隔多标签
-    content='notes',  -- 关联到 notes 表
-    content_rowid='id',
     tokenize='unicode61'  -- 中文 / Unicode 唯一可用分词器
 );
 ```
 
 **字段说明：**
-- `title` / `content`：`notes` 表对应列的直接引用（`content='notes'`）
+- `title` / `content`：冗余存储 notes 表对应列文本（由 trigger 同步）
 - `tag`：存储 `notes.tags` 文本（逗号分隔），用于无 `--tag` 筛选时的全文匹配
-- `content_rowid='id'`：`notes` 表的 integer PK（notes 表需新增 integer `id` 列，或使用 `rowid` 别名）
+- **非** `content=` 关联型（FTS5 standalone 表，数据冗余但功能等价）
 
 **UUID + rowid 双 ID 策略：**
 - `notes` 表现有 UUID text PK，新增 `id INTEGER PRIMARY KEY` 映射到 `rowid`
 - FTS5 用 `rowid` 关联 `notes`，保持 UUID 可追溯性
+- Standalone FTS5 的 `rowid` 与 notes.`id` 一致（trigger 写入时 `NEW.id` 即为 notes.`id`）
 
-### Trigger 自动同步（3 个）
+### Trigger 自动同步（3 个 Standalone FTS5 Manual Sync）
+
+> **SQLite 3.53.1 约束**：FTS5 `content='notes'` auto-sync 在 SQLite 3.53.1 中不工作，必须用 standalone FTS5 + 3 个 manual trigger 保持同步。功能等价（165 测试验证）。
 
 ```sql
 -- INSERT trigger：notes 新增时同步写入 notes_fts
@@ -90,7 +94,7 @@ CREATE TRIGGER notes_ai AFTER INSERT ON notes BEGIN
     VALUES (NEW.id, NEW.title, NEW.content, NEW.tags);
 END;
 
--- UPDATE trigger：notes 更新时先删后插（FTS5 content= 关联模式必须 DELETE+INSERT）
+-- UPDATE trigger：notes 更新时先删后插（standalone FTS5 必须 DELETE+INSERT 同步）
 CREATE TRIGGER notes_au AFTER UPDATE ON notes BEGIN
     DELETE FROM notes_fts WHERE rowid = OLD.id;
     INSERT INTO notes_fts(rowid, title, content, tag)

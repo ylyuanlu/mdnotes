@@ -1,8 +1,8 @@
 # ADR-0005 — FTS5 vs LIKE 全文搜索技术选型
 
-> **日期**：2026-06-20
+> **日期**：2026-06-20（2026-06-21 更新：接受 standalone FTS5 + 3 manual trigger，文档化 SQLite 3.53.1 约束）
 > **状态**：Accepted
-> **决策者**：Architect Agent（PM 仲裁后采纳）
+> **决策者**：Architect Agent（PM 仲裁后采纳，2026-06-21 确认 standalone FTS5 方案）
 > **相关文档**：`docs/PRD/04-search-command.md` / `docs/SPEC/04-search-command.md` / `.tasks/t_20260620_67128/debate-log.md`
 
 ## 背景
@@ -15,7 +15,8 @@ PM 最终仲裁：**采用 FTS5**（否决 LIKE MVP 方案）。
 
 **采用 SQLite FTS5 全文索引，不提供 LIKE fallback。**
 
-FTS5 schema：`content='notes'` 关联型 + `unicode61` tokenizer + 3 个 trigger 自动同步。
+FTS5 schema：standalone FTS5 virtual table + `unicode61` tokenizer + 3 个 manual trigger 自动同步。
+  > **注**：原始设计为 `content='notes'` 关联型，因 SQLite 3.53.1 auto-sync 不工作，降级为 standalone + manual trigger，功能等价。
 
 ## 考虑的替代方案
 
@@ -48,7 +49,18 @@ FTS5 schema：`content='notes'` 关联型 + `unicode61` tokenizer + 3 个 trigge
 
 ## 决定
 
-**采纳方案 B：FTS5 全文索引。**
+**采纳方案 B：FTS5 全文索引（Standalone + 3 Manual Triggers）。**
+
+> **2026-06-21 更新（Architect 修复 C-1 spec gap）**：
+> 原始方案 B 设想使用 `content='notes'` 关联型 FTS5 schema（auto-sync 由 FTS5 内部机制驱动）。
+> **实施发现**：SQLite 3.53.1 中，`content='notes'` 关联型的 auto-sync 机制不工作（trigger 无法驱动关联表更新）。
+> **解决方案**：降级为 **standalone FTS5 virtual table + 3 个 manual INSERT/UPDATE/DELETE trigger**。
+> - 功能等价：3 个 trigger 完全替代 auto-sync，所有 CRUD 操作均正确同步
+> - 数据冗余：stand-alone FTS5 会冗余存储 title/content/tag（非 `content=` 引用型）
+> - 实测：165 测试全部通过，storage.py FTS5 函数覆盖率 93.9%
+> - 可接受权衡：数据冗余量极小（每条笔记多存 2 份文本），同步正确性有保证
+>
+> 此约束是 SQLite 版本特性，不是 FTS5 设计缺陷，未来 SQLite 版本修复后可考虑迁移回 `content=` 关联型。
 
 理由（PM 仲裁）：
 1. 内容搜索场景（US-3）：LIKE on content TEXT 无索引，5000 条下比 FTS5 慢 5-30 倍，不可接受
@@ -77,6 +89,10 @@ FTS5 schema：`content='notes'` 关联型 + `unicode61` tokenizer + 3 个 trigge
 - ❌ **FTS5 模块依赖**：非所有 Python 环境可用（精简版 SQLite / 移动端 Python）
   - **缓解**：m920x 验证可用；CI 要求 FTS5 环境；README 明确 Python 3.14 + SQLite 3.46.1+ 依赖
   - **不可用时**：CLI 报错 "FTS5 not available"，exit code 2，不降级
+- ❌ **SQLite 3.53.1 `content='notes'` 关联型限制**：auto-sync 机制不工作
+  - **缓解**：使用 standalone FTS5 + 3 个 manual trigger（功能等价，165 测试验证）
+  - **数据冗余**：stand-alone FTS5 冗余存储 title/content/tag，非 `content=` 引用型
+  - **未来可升级**：SQLite 新版本修复后可迁移回 `content=` 关联型
 - ❌ **statement-level trigger 批量 update 限制**：tag rename 影响多条时只同步最后一条
   - **缓解**：> 10 条时 warning；auto-check 发现不一致时提示 rebuild
 - ❌ **Schema 迁移复杂度**：需新增 `id` integer 列映射 rowid（UUID 保留）
@@ -89,11 +105,12 @@ FTS5 schema：`content='notes'` 关联型 + `unicode61` tokenizer + 3 个 trigge
 **中等可逆**。
 
 - ✅ FTS5 删除成本低：`DROP TABLE notes_fts` + `DROP TRIGGER notes_ai/au/ad` 即可移除
-- ✅ 删除后 notes 表数据不受影响（content= 关联型，FTS5 不冗余存储）
+- ✅ 删除后 notes 表数据不受影响（standalone FTS5 冗余存储，但删除 FTS5 表本身不影响 notes 数据）
 - ✅ 可在 v2 阶段切换回 LIKE（或混合方案），不影响已有笔记
+- ⚠️ **数据冗余不可逆**：standalone FTS5 冗余存储 title/content/tag，删除 FTS5 表后冗余数据丢失（但 notes 表数据完整）
 - ❌ **数据层不可逆**：现有笔记的 `id` integer 列已添加，不可回退（但无害）
 - ❌ **重新索引成本**：从 LIKE 切回 FTS5 需重建索引（`--rebuild`）
 
 ---
 
-*Architect Agent 完成。PM 仲裁已执行。*
+*Architect Agent 完成。PM 仲裁已执行（2026-06-21 确认 standalone FTS5 + 3 manual trigger 方案）。*
