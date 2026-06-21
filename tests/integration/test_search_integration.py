@@ -2,11 +2,7 @@
 
 import os
 import subprocess
-import tempfile
-import shutil
-import time
 import pytest
-from pathlib import Path
 
 
 UV = "/home/yuanlu/.local/bin/uv"

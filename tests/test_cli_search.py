@@ -147,7 +147,7 @@ class TestSearchNoQuery:
         assert "Second" in result.output
         assert "First" in result.output
         # Newest first
-        lines = [l for l in result.output.strip().split("\n") if "[" in l]
+        lines = [line for line in result.output.strip().split("\n") if "[" in line]
         assert lines[0].startswith("[2]")
 
     def test_search_no_query_db_error_exits_2(self, search_isolated_db):
@@ -247,7 +247,7 @@ class TestSearchWithQuery:
         result = runner.invoke(cli, ["search", "python", "--limit", "2"], env=env)
         assert result.exit_code == 0, result.output
         # Count "Note N" occurrences in output
-        note_lines = [l for l in result.output.split('\n') if l.startswith('/tmp/')]
+        note_lines = [line for line in result.output.split('\n') if line.startswith('/tmp/')]
         assert len(note_lines) == 2, f"Expected 2 results, got: {result.output}"
 
 

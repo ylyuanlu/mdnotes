@@ -1,7 +1,6 @@
 """Tests for mdnotes FTS5 search functionality."""
 
 import os
-import sqlite3
 import tempfile
 import pytest
 from mdnotes import storage
