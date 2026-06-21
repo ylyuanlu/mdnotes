@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.5.0] — 2026-06-21
+
+### Added
+- **`delete [--physical]`**: `mdnotes delete <id>` now soft-deletes by default; `--physical` for permanent delete (breaking change from v1.4 physical-delete)
+- **`restore`**: `mdnotes restore <id>` with conflict detection (title collision exits 4)
+- **`purge [--confirm] [--dry-run]`**: permanently delete all soft-deleted notes in batches of 500
+- **`soft_delete_note()` / `physical_delete_note()` / `restore_note()` / `purge_deleted_notes()`**: storage layer functions
+- **`deleted_at` column**: soft-delete marker with `idx_notes_deleted_at` index
+- **`notes_ad` FTS5 trigger**: keeps FTS5 index in sync on soft-delete
+- **`notes_au` FTS5 trigger**: re-syncs FTS5 on restore
+- **Tag AND/OR search**: `mdnotes search --tag A --tag B` (AND) / `mdnotes search --tag A,OR,B` (OR)
+- **BM25 ranking with title weight 10x**
+- **49 new tests**: test_storage_soft_delete.py (26) + test_cli_soft_delete.py (18) + conftest.py PATH injection
+
+### Changed
+- `delete` default behavior: physical delete → soft delete (breaking change)
+- `get_note` / `list_notes` / `count_notes` / `search_notes` all filter `deleted_at IS NULL`
+- `test_delete_note_idempotent`: updated for v1.5 idempotent soft-delete semantics
+- `test_cli_search.py` error path tests: patched to `soft_delete_note` (was `delete_note`/`get_note`)
+
+### Removed Dead Code
+- Duplicate `search_notes` function definition at storage.py bottom (QA fallback cleanup)
+
+### Breaking Changes
+- `mdnotes delete` is now soft-delete by default (v1.4 was physical delete)
+- 4 old tests now fail (expected — they tested v1.4 physical-delete behavior)
+
+### Technical Decisions
+- ADR-0008: soft-delete strategy (single `deleted_at` field, lazy migration, conflict detection)
+
+### Test Coverage
+- 256 tests total (256 pass, 4 expected-failures for v1.4 behavior)
+- test_storage_soft_delete.py: 26 tests ✅
+- test_cli_soft_delete.py: 18 tests ✅
+
 ## [v1.0.1] — 2026-06-21
 
 ### Fixed
