@@ -388,19 +388,19 @@ class TestDeleteErrorPaths:
     """Error path coverage for delete command."""
 
     def test_delete_db_error_on_get_note_exits_1(self, search_isolated_db):
-        """delete when get_note raises DatabaseError exits 1."""
+        """delete when soft_delete_note raises DatabaseError exits 1."""
         runner, env = search_isolated_db
         storage.add_note("Note", "content", file_path="/tmp/a.md")
-        with patch.object(storage, "get_note", side_effect=storage.DatabaseError("delete db error")):
+        with patch.object(storage, "soft_delete_note", side_effect=storage.DatabaseError("delete db error")):
             result = runner.invoke(cli, ["delete", "1", "--force"], env=env)
         assert result.exit_code == 1, result.output
         assert "delete db error" in result.output
 
     def test_delete_db_error_on_delete_note_exits_1(self, search_isolated_db):
-        """delete when delete_note raises DatabaseError exits 1."""
+        """delete when soft_delete_note raises DatabaseError exits 1."""
         runner, env = search_isolated_db
         storage.add_note("Note", "content", file_path="/tmp/a.md")
-        with patch.object(storage, "delete_note", side_effect=storage.DatabaseError("delete_note db error")):
+        with patch.object(storage, "soft_delete_note", side_effect=storage.DatabaseError("delete_note db error")):
             result = runner.invoke(cli, ["delete", "1", "--force"], env=env)
         assert result.exit_code == 1, result.output
         assert "delete_note db error" in result.output
@@ -503,7 +503,7 @@ class TestDeleteInputAndDbErrors:
         """delete when delete_note raises DatabaseError exits 1."""
         runner, env = search_isolated_db
         storage.add_note("Note", "content", file_path="/tmp/a.md")
-        with patch.object(storage, "delete_note", side_effect=storage.DatabaseError("delete_note_db_error")):
+        with patch.object(storage, "soft_delete_note", side_effect=storage.DatabaseError("delete_note_db_error")):
             result = runner.invoke(cli, ["delete", "1", "--force"], env=env)
         assert result.exit_code == 1, result.output
         assert "delete_note_db_error" in result.output

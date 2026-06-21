@@ -200,11 +200,19 @@ class TestStorageDeleteNote:
             storage.get_note(note_id)
 
     def test_delete_note_idempotent(self):
-        """AC-19: deleting same note twice raises (not silently succeeds)."""
+        """AC-19 v1.5: soft-delete is idempotent — second delete succeeds silently."""
         note_id = storage.add_note("Delete me twice", "")
-        storage.delete_note(note_id)
-        with pytest.raises(storage.NoteNotFoundError):
-            storage.delete_note(note_id)
+        storage.delete_note(note_id)  # soft-delete
+        # v1.5: soft_delete_note is idempotent — no exception raised
+        storage.delete_note(note_id)  # second delete is no-op
+        # Verify note is still soft-deleted (not gone)
+        conn = storage._get_connection(storage._get_db_path())
+        row = conn.execute(
+            "SELECT deleted_at FROM notes WHERE id = ?", (note_id,)
+        ).fetchone()
+        conn.close()
+        assert row is not None, "Note should still exist in DB"
+        assert row[0] is not None, "Note should be soft-deleted (deleted_at set)"
 
 
 class TestStorageDatabaseError:
