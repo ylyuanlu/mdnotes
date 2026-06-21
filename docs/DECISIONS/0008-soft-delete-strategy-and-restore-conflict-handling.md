@@ -1,7 +1,7 @@
 # ADR-0008 — soft-delete 策略与 restore 冲突处理
 
 > **日期**：2026-06-21
-> **状态**：Proposed
+> **状态**：Accepted
 > **决策者**：Architect Agent
 > **相关文档**：`docs/PRD/05-soft-delete.md` `docs/SPEC/05-06-soft-delete-search-v1.5.md`
 
