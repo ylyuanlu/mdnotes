@@ -1052,7 +1052,8 @@ def search_notes(
                     SELECT n.id, n.title, n.content, n.tags,
                            '' AS snippet,
                            0.0 AS score,
-                           n.file_path
+                           n.file_path,
+                           n.created_at
                     FROM notes n
                     JOIN tags t ON t.file_path = n.file_path
                     WHERE t.tag_name = ?
@@ -1085,6 +1086,7 @@ def search_notes(
                     "snippet": row[4] or "",
                     "score": row[5],
                     "file_path": row[6] or "",
+                    "created_at": row[7] if len(row) > 7 else None,
                 })
             return results
         finally:

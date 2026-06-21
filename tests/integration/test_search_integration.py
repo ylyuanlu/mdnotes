@@ -91,20 +91,57 @@ class TestSearchCLI:
         _, _, code = mdnotes_cmd(["search", "nonexistent_term_xyz"], env=env)
         assert code == 1, "search with no results should exit 1"
 
-        # Missing query → exit 2
-        _, err, code = mdnotes_cmd(["search", ""], env=env)
-        assert code == 2, "search with empty query should exit 2"
-
-    def test_search_empty_query(self, test_vault, tmp_path):
-        """Empty query returns exit code 2 with usage hint."""
+    def test_search_no_query_lists_all_notes(self, test_vault, tmp_path):
+        """No query argument lists all notes (like ls), exit 0."""
         db_path = tmp_path / "notes.db"
         env = {
             "MDNOTES_DB": str(db_path),
             "MDNOTES_VAULT": str(test_vault),
         }
-        _, err, code = mdnotes_cmd(["search", ""], env=env)
-        assert code == 2
-        assert "query" in err.lower() or "usage" in err.lower()
+        # Add notes
+        mdnotes_cmd(["add", str(test_vault / "a.md")], env=env)  # A
+        mdnotes_cmd(["add", str(test_vault / "b.md")], env=env)  # B
+        mdnotes_cmd(["add", str(test_vault / "c.md")], env=env)  # C
+
+        # No query → lists all notes
+        out, err, code = mdnotes_cmd(["search"], env=env)
+        assert code == 0, f"search with no query should exit 0: {err}"
+        assert "A" in out, f"Should list note A: {out}"
+        assert "B" in out, f"Should list note B: {out}"
+        assert "C" in out, f"Should list note C: {out}"
+
+    def test_search_empty_query_arg_lists_all_notes(self, test_vault, tmp_path):
+        """Empty string query lists all notes (like ls), exit 0."""
+        db_path = tmp_path / "notes.db"
+        env = {
+            "MDNOTES_DB": str(db_path),
+            "MDNOTES_VAULT": str(test_vault),
+        }
+        mdnotes_cmd(["add", str(test_vault / "a.md")], env=env)
+        mdnotes_cmd(["add", str(test_vault / "b.md")], env=env)
+
+        out, err, code = mdnotes_cmd(["search", ""], env=env)
+        assert code == 0, f"search '' should exit 0: {err}"
+        assert "A" in out, f"Should list note A: {out}"
+        assert "B" in out, f"Should list note B: {out}"
+
+    def test_search_no_query_with_tag(self, test_vault, tmp_path):
+        """search --tag v1 (no query) lists only notes tagged v1."""
+        db_path = tmp_path / "notes.db"
+        env = {
+            "MDNOTES_DB": str(db_path),
+            "MDNOTES_VAULT": str(test_vault),
+        }
+        mdnotes_cmd(["add", str(test_vault / "a.md")], env=env)  # tags: v1, work
+        mdnotes_cmd(["add", str(test_vault / "b.md")], env=env)  # tags: v1
+        mdnotes_cmd(["add", str(test_vault / "c.md")], env=env)  # tags: v2
+
+        # No query, --tag v1 → only v1-tagged notes
+        out, err, code = mdnotes_cmd(["search", "--tag", "v1"], env=env)
+        assert code == 0, f"search --tag v1 (no query) should exit 0: {err}"
+        assert "A" in out, f"Should list note A (tagged v1): {out}"
+        assert "B" in out, f"Should list note B (tagged v1): {out}"
+        assert "C" not in out, f"Should NOT list note C (tagged v2): {out}"
 
     def test_search_no_results(self, test_vault, tmp_path):
         """Search with no matches returns exit code 1."""

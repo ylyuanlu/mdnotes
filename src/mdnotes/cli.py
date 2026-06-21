@@ -595,19 +595,21 @@ def search(query: Optional[str], tag_filter: Optional[str], limit: int, check_fl
     """
     Search notes by keyword using FTS5 full-text index.
 
-    QUERY is the search phrase. Without quotes, uses OR semantics
-    (e.g. "python redis" finds notes with python OR redis).
-    With quotes, uses AND semantics ("python redis" finds both).
+    With no QUERY, lists all notes (like ``mdnotes ls``) sorted newest first.
+    With a QUERY, uses FTS5 full-text search:
+      - Without quotes, uses OR semantics (e.g. "python redis" finds python OR redis)
+      - With quotes, uses AND semantics ("python redis" finds both)
 
     Exit codes:
       0 = results found (or --check/--rebuild succeeded)
       1 = no results
-      2 = error (missing query, FTS5 unavailable, etc.)
+      2 = error (FTS5 unavailable, etc.)
 
     Examples:
-      mdnotes search python
+      mdnotes search              # list all notes
+      mdnotes search python        # FTS5 search
       mdnotes search "python redis"
-      mdnotes search --tag v1
+      mdnotes search --tag v1      # list all notes tagged v1
       mdnotes search --check
       mdnotes search --rebuild
     """
@@ -651,11 +653,27 @@ def search(query: Optional[str], tag_filter: Optional[str], limit: int, check_fl
         click.echo("FTS5 index rebuilt successfully.")
         raise SystemExit(0)
 
-    # Normal search path
+    # No query: list all notes (like ls)
     if not query or not query.strip():
-        click.echo("Error: missing query argument.", err=True)
-        click.echo("Usage: mdnotes search <query>", err=True)
-        raise SystemExit(2)
+        try:
+            if tag_filter:
+                # Tag-only search with no text query → use search_notes with empty query
+                storage.ensure_fts5()
+                results = storage.search_notes("", tag=tag_filter, limit=limit)
+            else:
+                # No query, no tag → list all notes (ls behavior)
+                results = storage.list_notes(sort="created_at", order="desc")
+        except storage.DatabaseError as e:
+            click.echo(f"Error: {e}", err=True)
+            raise SystemExit(2)
+
+        if not results:
+            click.echo("No notes yet.")
+            raise SystemExit(0)
+
+        for note in results:
+            click.echo(f"[{note['id']}] {note['title']} ({note['created_at']})")
+        raise SystemExit(0)
 
     processed = _preprocess_query(query)
 
