@@ -1,4 +1,4 @@
-# tag rename - 技术规范
+# tag rename - 技术规范（SPEC 对齐 PRD 03-tag-rename）
 
 > **Task ID:** t_20260620_9278f7
 > **作者:** Architect Agent
