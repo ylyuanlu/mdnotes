@@ -1,11 +1,19 @@
 # mdnotes
 
-A fast CLI notes app with Markdown support, FTS5 full-text search, and tag-based filtering.
+A fast CLI notes app with Markdown support, FTS5 full-text search, tag-based filtering, and soft-delete.
 
-**Current version**: v1.0.1
-**Status**: Stable — 211 tests pass, 86% coverage, 1.3ms P95 search latency
+**Current version**: v1.5.0
+**Status**: Stable — 260 tests pass, 85% coverage, 1.41ms P95 search latency
 
 ## Features
+
+### v1.5.0+ (soft-delete + search optimizations)
+- **`delete [--physical]`** — soft-delete by default; `--physical` for permanent delete (breaking change from v1.4)
+- **`restore <id>`** — restore a soft-deleted note with conflict detection (title collision → exit 4)
+- **`purge [--confirm] [--dry-run]`** — permanently delete all soft-deleted notes in batches of 500
+- **Tag AND/OR search** — `mdnotes search --tag A --tag B` (AND) / `mdnotes search --tag A,OR,B` (OR)
+- **CJK hint** — non-quoted CJK query suggests `--cjk` flag for trigram precision
+- **`search --color`** — terminal ANSI color highlighting
 
 ### v1.0.0+ (search)
 - **FTS5 full-text search** — `mdnotes search <query>` with BM25 ranking (title weight 10x)
@@ -24,7 +32,7 @@ A fast CLI notes app with Markdown support, FTS5 full-text search, and tag-based
 
 ### v0.1.0-mvp (CRUD)
 - **`add`** — create note with title + Markdown content
-- **`list` / `ls`** — list all notes (newest first)
+- **`list` / `ls`** — list all notes (newest first, excludes soft-deleted)
 - **`show <id>`** — display note as HTML
 - **`delete <id>`** — soft-aware delete (with `--force`)
 
