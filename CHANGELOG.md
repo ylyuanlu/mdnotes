@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.0.0] — 2026-06-21
+
+### Added
+- **`search` CLI**: `mdnotes search <query>` FTS5 全文检索，支持 AND/OR 引号语义
+- **`--tag` filter**: JOIN tags 表精确筛选（`tag_name = ? AND deleted_at IS NULL`）
+- **`--check` health check**: FTS5 rowid 对照方案检测索引一致性
+- **`--rebuild` index rebuild**: 原子在线重建 FTS5 索引，无 downtime
+- **`--limit N`**: 最大返回 N 条，默认 100
+- **BM25 排序**: `bm25(notes_fts, 10.0, 1.0, 1.0)` title 权重 10x
+- **3 个 FTS5 trigger**: `notes_ai` / `notes_au` / `notes_ad` 保持索引同步
+- **165 tests**: 22 unit + 11 integration，全部通过
+
+### Technical Decisions
+- ADR-0005: FTS5 vs LIKE 技术选型（最终采纳 FTS5）
+- ADR-0006: search scope 决策（standalone FTS5 + manual trigger，SQLite 3.53.1 约束）
+
+### Constraints
+- SQLite 3.53.1: `content='notes'` 关联型 FTS5 auto-sync 不工作，降级为 standalone FTS5 + 3 manual trigger（功能等价）
+
+### Test Coverage
+- 165 tests pass
+- storage.py FTS5 函数覆盖率 93.9%
+- storage.py 整体覆盖率 86%
+
+### Review Notes
+- Review verdict: fail（1 critical C-1: spec gap — SPEC §Data Structures 未文档化 SQLite 3.53.1 约束）
+- C-1 spec gap 已关闭：ADR-0005 + SPEC §Data Structures 已更新文档
+- C-2/C-3/C-4: 全部修复 ✅
+
 ## [v0.1.0] — 2026-06-20
 
 ### Added
