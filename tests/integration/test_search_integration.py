@@ -5,17 +5,18 @@ import subprocess
 import pytest
 
 
-# Use whichever `uv` is on PATH (CI runner installs it; local dev uses ~/.local/bin/uv).
-UV = "uv"
+# Use the installed `mdnotes` entry point (created by `pip install -e ".[dev]"`
+# or `uv pip install -e ".[dev]"`). Works on CI runner and local dev alike.
+MDNOTES = "mdnotes"
 
 
 def mdnotes_cmd(args, cwd=None, env=None, input=None):
-    """Run mdnotes CLI via uv and return (stdout, stderr, exit_code)."""
+    """Run mdnotes CLI and return (stdout, stderr, exit_code)."""
     base_env = dict(os.environ)
     if env:
         base_env.update(env)
     result = subprocess.run(
-        [UV, "run", "mdnotes"] + args,
+        [MDNOTES] + args,
         cwd=cwd or os.getcwd(),
         capture_output=True,
         text=True,
