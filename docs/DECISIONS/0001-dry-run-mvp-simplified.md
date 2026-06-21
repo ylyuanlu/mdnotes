@@ -2,6 +2,7 @@
 
 > **日期**：2026-06-20
 > **状态**：Accepted
+> **适用版本**：v1.5.0+
 > **决策者**：Architect Agent
 > **相关文档**：`docs/PRD/03-tag-rename.md` `docs/SPEC/03-tag-rename-command.md`
 

@@ -2,6 +2,7 @@
 
 > **日期**：2026-06-20（2026-06-21 更新：接受 standalone FTS5 + 3 manual trigger，文档化 SQLite 3.53.1 约束）
 > **状态**：Accepted
+> **适用版本**：v1.5.0+
 > **决策者**：Architect Agent（PM 仲裁后采纳，2026-06-21 确认 standalone FTS5 方案）
 > **相关文档**：`docs/PRD/04-search-command.md` / `docs/SPEC/04-search-command.md` / `.tasks/t_20260620_67128/debate-log.md`
 

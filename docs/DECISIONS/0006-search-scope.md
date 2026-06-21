@@ -2,6 +2,7 @@
 
 > **日期**：2026-06-20
 > **状态**：Accepted
+> **适用版本**：v1.5.0+
 > **决策者**：Architect Agent
 > **相关文档**：`docs/PRD/04-search-command.md` / `docs/SPEC/04-search-command.md` / `.tasks/t_20260620_67128/debate-log.md`
 
