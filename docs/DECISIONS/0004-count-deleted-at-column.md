@@ -2,7 +2,7 @@
 
 > **日期**：2026-06-19
 > **状态**：Accepted
-> **适用版本**：v1.5.0+
+> **适用版本**：v1.5+
 > **决策者**：Architect Agent
 > **相关文档**：`docs/PRD/02-count-command.md` / `docs/SPEC/02-count-command.md`
 

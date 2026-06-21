@@ -2,7 +2,7 @@
 
 > **日期**：2026-06-18
 > **状态**：Accepted
-> **适用版本**：v1.5.0+
+> **适用版本**：v1.5+
 > **决策者**：Architect Agent
 > **相关文档**：`docs/PRD/01-cli-mvp.md` / `docs/SPEC/01-cli-mvp.md`
 

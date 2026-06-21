@@ -2,12 +2,12 @@
 
 A fast CLI notes app with Markdown support, FTS5 full-text search, tag-based filtering, and soft-delete.
 
-**Current version**: v1.5.0
+**Current version**: v1.5
 **Status**: Stable — 260 tests pass, 85% coverage, 1.41ms P95 search latency
 
 ## Features
 
-### v1.5.0+ (soft-delete + search optimizations)
+### v1.5+ (soft-delete + search optimizations)
 - **`delete [--physical]`** — soft-delete by default; `--physical` for permanent delete (breaking change from v1.4)
 - **`restore <id>`** — restore a soft-deleted note with conflict detection (title collision → exit 4)
 - **`purge [--confirm] [--dry-run]`** — permanently delete all soft-deleted notes in batches of 500
@@ -15,22 +15,22 @@ A fast CLI notes app with Markdown support, FTS5 full-text search, tag-based fil
 - **CJK hint** — non-quoted CJK query suggests `--cjk` flag for trigram precision
 - **`search --color`** — terminal ANSI color highlighting
 
-### v1.0.0+ (search)
+### v1.0+ (search)
 - **FTS5 full-text search** — `mdnotes search <query>` with BM25 ranking (title weight 10x)
 - **Tag filtering** — `mdnotes search --tag <tag>` precise JOIN filter
 - **Health check** — `mdnotes search --check` verifies FTS5 index consistency
 - **Online reindex** — `mdnotes search --rebuild` atomic rebuild with no downtime
 - **Result limit** — `mdnotes search --limit N` (default 100)
 
-### v0.1.1+ (count)
+### v0.1+ (count)
 - **`count` sub-command** — `mdnotes count` returns total active notes
 - **Auto-init** — DB auto-created on first use
 
-### v0.1.0+ (tag operations)
+### v0.1+ (tag operations)
 - **`tag rename`** — `mdnotes tag rename <old> <new>` with `--dry-run` / `--force` / `--ignore-missing` / `--glob` / `--exclude`
 - **Multi-file add** — `mdnotes add file1.md file2.md ...`
 
-### v0.1.0-mvp (CRUD)
+### v0.1 (CRUD)
 - **`add`** — create note with title + Markdown content
 - **`list` / `ls`** — list all notes (newest first, excludes soft-deleted)
 - **`show <id>`** — display note as HTML
@@ -102,7 +102,7 @@ ruff check src tests
 mypy src/mdnotes/
 ```
 
-### Test coverage (v1.0.1)
+### Test coverage (v1.0)
 
 | Module | Coverage |
 |---|---|
