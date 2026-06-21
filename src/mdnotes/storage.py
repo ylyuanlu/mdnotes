@@ -78,7 +78,12 @@ def _get_connection(path: str) -> sqlite3.Connection:
     """Get a SQLite connection with the DB initialized."""
     _ensure_dir(path)
     conn = sqlite3.connect(path, timeout=30.0)
+    # Performance PRAGMAs: WAL for concurrent reads, large cache, memory temp
     conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA cache_size = -64000;")   # 64 MB cache
+    conn.execute("PRAGMA temp_store = MEMORY;")
+    conn.execute("PRAGMA mmap_size = 268435456;")  # 256 MB memory-mapped I/O
     conn.execute(CREATE_TABLE_SQL)
     # Lazy migration: add tags and file_path columns if not exist
     try:
@@ -89,7 +94,7 @@ def _get_connection(path: str) -> sqlite3.Connection:
         conn.execute("ALTER TABLE notes ADD COLUMN file_path TEXT DEFAULT NULL")
     except sqlite3.OperationalError:
         pass  # column already exists
-    # Create tags table and index (split to avoid multi-statement warning)
+    # Create tags table and indexes (split to avoid multi-statement warning)
     conn.execute("""
 CREATE TABLE IF NOT EXISTS tags (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,6 +107,11 @@ CREATE TABLE IF NOT EXISTS tags (
     conn.execute("""
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_file_tag
   ON tags(file_path, tag_name);
+""")
+    # idx_tags_tag_name: faster tag-only lookups (e.g. --tag filter without file_path)
+    conn.execute("""
+CREATE INDEX IF NOT EXISTS idx_tags_tag_name
+  ON tags(tag_name);
 """)
     # Initialize FTS5 if not exists
     _ensure_fts5_conn(conn)
@@ -1017,22 +1027,39 @@ def search_notes(
             if tag:
                 # JOIN tags table for exact tag_name match (per spec)
                 # FTS5 query is the user query; tags table does exact filter
-                fts5_query = query if query else "*"
-                sql = """
-                SELECT n.id, n.title, n.content, n.tags,
-                       snippet(notes_fts, 1, '<mark>', '</mark>', '...', 32) AS snippet,
-                       bm25(notes_fts, 10.0, 1.0, 1.0) AS score,
-                       n.file_path
-                FROM notes n
-                JOIN notes_fts f ON n.id = f.rowid
-                JOIN tags t ON t.file_path = n.file_path
-                WHERE notes_fts MATCH ?
-                  AND t.tag_name = ?
-                  AND t.deleted_at IS NULL
-                ORDER BY score
-                LIMIT ?
-                """
-                cursor = conn.execute(sql, (fts5_query, tag, limit))
+                # When query is empty, use "" which FTS5 treats as match-nothing
+                # (the tag filter alone determines results)
+                fts5_query = query if query.strip() else ""
+                if fts5_query:
+                    sql = """
+                    SELECT n.id, n.title, n.content, n.tags,
+                           snippet(notes_fts, 1, '<mark>', '</mark>', '...', 32) AS snippet,
+                           bm25(notes_fts, 10.0, 1.0, 1.0) AS score,
+                           n.file_path
+                    FROM notes n
+                    JOIN notes_fts f ON n.id = f.rowid
+                    JOIN tags t ON t.file_path = n.file_path
+                    WHERE notes_fts MATCH ?
+                      AND t.tag_name = ?
+                      AND t.deleted_at IS NULL
+                    ORDER BY score
+                    LIMIT ?
+                    """
+                    cursor = conn.execute(sql, (fts5_query, tag, limit))
+                else:
+                    # Tag-only search (no text query): skip FTS5 MATCH, use tags table only
+                    sql = """
+                    SELECT n.id, n.title, n.content, n.tags,
+                           '' AS snippet,
+                           0.0 AS score,
+                           n.file_path
+                    FROM notes n
+                    JOIN tags t ON t.file_path = n.file_path
+                    WHERE t.tag_name = ?
+                      AND t.deleted_at IS NULL
+                    LIMIT ?
+                    """
+                    cursor = conn.execute(sql, (tag, limit))
             else:
                 sql = """
                 SELECT n.id, n.title, n.content, n.tags,
