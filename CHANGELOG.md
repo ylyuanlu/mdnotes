@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.0.1] — 2026-06-21
+
+### Fixed
+- **P95 latency**: `search` P95 从 183.6ms 降至 1.3ms（WAL + cache + mmap + idx_tags）
+- **Search UX**: `mdnotes search` 无 query 时改为 exit 0 + 列出全部 notes（而非 exit 2）
+- **Search UX**: `mdnotes search --tag <tag>` 无 query 时正确过滤（不再要求 query 参数）
+
+### Added
+- **`tests/test_cli_search.py`**: 新增 46 个测试，cli.py coverage 72% → 85%（v0.5 决策 3 ≥80% gate pass）
+- **211 tests**: v1.0.1 全部通过 in 7.15s
+
+### Technical Decisions
+- ADR-0005/ADR-0006 继承（v1.0.0 技术基础不变）
+
+### Review Notes
+- Review verdict: pass（minor=3，不阻塞：tag-only search 无 ORDER BY / SPEC gap BC-1 / 46 vs 44 tests 数量差）
+- QA P95=79.93ms ✅（target ≤100ms）
+
 ## [v1.0.0] — 2026-06-21
 
 ### Added
@@ -87,39 +105,4 @@ All notable changes to this project will be documented in this file.
 
 ## [v0.5-stage-close] — 2026-06-20
 
-### v0.5 阶段收尾工作（在 main 上落地）
-
-**v0.5 阶段 = 工作流方案验证阶段，正在收尾**（不是封版，是 v0.5 阶段工作落到 main 上）
-
-### mdnotes 项目版本（验证载体）
-- 主分支合并 feature/v0.1.1（count sub-command）
-- 当前 main HEAD：v0.1.1（含 70 tests + 80% coverage + ruff 全绿）
-- 项目内 tag：v0.1.0-mvp + v0.1.1（mdnotes 项目自身 release tag）
-
-### v0.5 阶段里程碑（在 main 上的产物）
-- 软强制层（sub-agent 框架）
-- 8 状态机（debating → done + 6 failed 子状态）
-- 6 gate 验证（task-status / status-transition / review-report / test-report × schema + critical + coverage）
-- 决策 5 重新定义（飞书多 bot outbound 弃用）
-- 验证载体 mdnotes：task 1 + task 2 端到端跑通
-- merge feature/v0.1.1 → main
-
-### 工作流框架（v0.5 阶段当前状态）
-- 6 role agent：main / pm / architect / dev / reviewer / qa / devops
-- 4 debate sub-agent：product-champion / tech-reviewer / devil-advocate / quality-gatekeeper
-- 4 个 6 gate 验证脚本：兼容 `## field` 标题 + `field:` 单行两种格式
-- 9 个 templates：PRD / SPEC / DECISIONS / debate-log / review-report / test-report / context-summary / task.json / feedback.json / project.json
-- PM AGENTS.md §2/§2.1：Round 3 触发器 + session 重启容忍
-- main AGENTS.md 跨平台兼容：sessions_yield 等 push 事件
-
-### 飞书多 bot 基础设施
-- 11 个 bot app + 11 个 bindings（main/pm/architect/dev/reviewer/qa/devops/sre/content/support）
-- 决策 5 重新定义：bot 基础设施就位（不指望 sub-agent / agent 顶级 session 自动 outbound）
-
-### v0.5 阶段收尾 = 进入 v1.0 阶段的实施方案
-- v0.5 阶段还在进行中（"0.5 不是刚要完成吗"）
-- v0.5 阶段收尾 = 为 v1.0 阶段准备实施方案（不是发布 v1.0，不是封版 v0.5）
-- v1.0 阶段 = v0.5 收尾后的下一阶段（实施方案待主公定稿）
-
-### 下一步（独立动作）
-- mdnotes task 3（v0.2 soft-delete）= mdnotes 项目自己的下一步动作（项目层，不是框架层）
+> **注**：v0.5 阶段是工作流方案验证阶段，过程已记录于 `docs/DECISIONS/0007-v1.0-retrospective.md`（v1.0 复盘）。本节不计入 release tag。

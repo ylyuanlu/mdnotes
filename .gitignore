@@ -44,3 +44,5 @@ archive/
 # 日志
 *.log
 logs/
+.venv-py311-pip/
+.venv-py311/
