@@ -1,4 +1,4 @@
-# ADR 0002 — tag rename 回滚边界 + Pre-flight 可写性检查
+# ADR-0011 — tag rename 回滚边界 + Pre-flight 可写性检查
 
 > **日期**：2026-06-20
 > **状态**：Accepted

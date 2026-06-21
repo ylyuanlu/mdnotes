@@ -1,4 +1,4 @@
-# ADR 0001 — tag rename dry-run MVP 简化版：文件列表+数量（不含 diff）
+# ADR-0010 — tag rename dry-run MVP 简化版：文件列表+数量（不含 diff）
 
 > **日期**：2026-06-20
 > **状态**：Accepted
