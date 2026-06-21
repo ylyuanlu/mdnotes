@@ -1432,11 +1432,6 @@ def search_notes(
     except sqlite3.Error as e:
         raise DatabaseError(f"FTS5 search error: {e}") from e
 
-    try:
-        return _search()
-    except sqlite3.Error as e:
-        raise DatabaseError(f"FTS5 search error: {e}") from e
-
 
 def check_fts5_health() -> dict[str, Any]:
     """
