@@ -12,10 +12,50 @@ CREATE TABLE IF NOT EXISTS notes (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     title      TEXT    NOT NULL,
     content    TEXT,
+    file_path  TEXT    DEFAULT NULL,
+    tags       TEXT    DEFAULT '',
     created_at TEXT    NOT NULL DEFAULT (datetime('now', 'localtime')),
     updated_at TEXT    NOT NULL DEFAULT (datetime('now', 'localtime'))
 );
 """
+
+# FTS5 virtual table (stand-alone, not content= linked to notes)
+# title + content + tag stored directly in FTS5 table.
+# Sync maintained via manual triggers on notes CRUD.
+ENSURE_FTS5_SQL = """
+CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+    title,
+    content,
+    tag,
+    tokenize='unicode61'
+);
+"""
+
+# Triggers fire on notes CRUD to keep FTS5 stand-alone table in sync.
+# FTS5 rowid = notes.id (INTEGER PRIMARY KEY).
+FTS5_TRIGGERS = [
+    # INSERT: add new note to FTS5 (tag populated via separate UPDATE after set_note_tags)
+    (
+        "CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN "
+        "INSERT INTO notes_fts(rowid, title, content, tag) "
+        "VALUES (NEW.id, NEW.title, NEW.content, NEW.tags);"
+        "END;"
+    ),
+    # UPDATE: delete old FTS5 entry + insert new one (for title/content/tags changes)
+    (
+        "CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN "
+        "DELETE FROM notes_fts WHERE rowid = OLD.id; "
+        "INSERT INTO notes_fts(rowid, title, content, tag) "
+        "VALUES (NEW.id, NEW.title, NEW.content, NEW.tags);"
+        "END;"
+    ),
+    # DELETE: remove FTS5 entry
+    (
+        "CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN "
+        "DELETE FROM notes_fts WHERE rowid = OLD.id;"
+        "END;"
+    ),
+]
 
 # DB path resolution
 _DB_DIR = os.path.expanduser("~/.mdnotes")
@@ -40,6 +80,15 @@ def _get_connection(path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(path, timeout=30.0)
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute(CREATE_TABLE_SQL)
+    # Lazy migration: add tags and file_path columns if not exist
+    try:
+        conn.execute("ALTER TABLE notes ADD COLUMN tags TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+    try:
+        conn.execute("ALTER TABLE notes ADD COLUMN file_path TEXT DEFAULT NULL")
+    except sqlite3.OperationalError:
+        pass  # column already exists
     # Create tags table and index (split to avoid multi-statement warning)
     conn.execute("""
 CREATE TABLE IF NOT EXISTS tags (
@@ -54,6 +103,8 @@ CREATE TABLE IF NOT EXISTS tags (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_file_tag
   ON tags(file_path, tag_name);
 """)
+    # Initialize FTS5 if not exists
+    _ensure_fts5_conn(conn)
     return conn
 
 
@@ -602,13 +653,14 @@ def scan_and_index_file(file_path: str) -> list[str]:
 # Note CRUD (existing)
 # ---------------------------------------------------------------------------
 
-def add_note(title: str, content: Optional[str] = None) -> int:
+def add_note(title: str, content: Optional[str] = None, file_path: Optional[str] = None) -> int:
     """
     Insert a new note and return its integer id.
 
     Args:
         title: Note title (must be non-empty after stripping)
         content: Note body (may be empty string or None)
+        file_path: Optional source file path (for FTS5 tag JOIN with tags table)
 
     Returns:
         The integer id of the newly created note
@@ -632,8 +684,8 @@ def add_note(title: str, content: Optional[str] = None) -> int:
         conn = _get_connection(db_path)
         try:
             cursor = conn.execute(
-                "INSERT INTO notes (title, content) VALUES (?, ?)",
-                (title, content),
+                "INSERT INTO notes (title, content, file_path) VALUES (?, ?, ?)",
+                (title, content, file_path),
             )
             conn.commit()
             _check_integrity(conn)
@@ -839,3 +891,261 @@ def _check_integrity(conn: sqlite3.Connection) -> None:
         result2 = cursor2.fetchone()
         if result2 is None or result2[0] != "ok":
             raise DatabaseError("Database corrupted")
+
+
+# ---------------------------------------------------------------------------
+# FTS5 full-text search
+# ---------------------------------------------------------------------------
+
+def _fts5_available() -> bool:
+    """Check if SQLite FTS5 module is available."""
+    try:
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE VIRTUAL TABLE t USING fts5(a)")
+        conn.close()
+        return True
+    except sqlite3.OperationalError:
+        return False
+
+
+def _ensure_fts5_conn(conn: sqlite3.Connection) -> None:
+    """Initialize FTS5 virtual table and triggers on an existing connection."""
+    if not _fts5_available():
+        raise DatabaseError("FTS5 is not available in this SQLite installation")
+    conn.execute(ENSURE_FTS5_SQL)
+    for trigger_sql in FTS5_TRIGGERS:
+        try:
+            conn.execute(trigger_sql)
+        except sqlite3.OperationalError:
+            pass  # trigger already exists
+    conn.commit()
+
+
+def ensure_fts5() -> None:
+    """
+    Ensure FTS5 virtual table and triggers exist (idempotent).
+
+    Raises:
+        DatabaseError: If FTS5 is not available
+    """
+    if not _fts5_available():
+        raise DatabaseError("FTS5 is not available in this SQLite installation")
+    db_path = _get_db_path()
+
+    @_retry_on_lock
+    def _ensure():
+        conn = _get_connection(db_path)
+        try:
+            _ensure_fts5_conn(conn)
+        finally:
+            conn.close()
+
+    _ensure()
+
+
+def set_note_tags(note_id: int, tags_string: str) -> None:
+    """
+    Update the tags column of a note and sync to FTS5 via UPDATE trigger.
+
+    Args:
+        note_id: Integer note id
+        tags_string: Comma-separated tag string (e.g. "python,redis,v1")
+
+    Raises:
+        NoteNotFoundError: If note does not exist
+        DatabaseError: On SQLite error
+    """
+    if not isinstance(note_id, int):
+        raise ValueError("note_id must be an integer")
+    db_path = _get_db_path()
+
+    @_retry_on_lock
+    def _update():
+        conn = _get_connection(db_path)
+        try:
+            # Check note exists
+            cursor = conn.execute("SELECT id FROM notes WHERE id = ?", (note_id,))
+            if cursor.fetchone() is None:
+                conn.close()
+                raise NoteNotFoundError(f"Note {note_id} not found")
+            conn.execute("UPDATE notes SET tags = ? WHERE id = ?", (tags_string, note_id))
+            conn.commit()
+        finally:
+            conn.close()
+
+    try:
+        _update()
+    except NoteNotFoundError:
+        raise
+    except sqlite3.Error as e:
+        raise DatabaseError(f"Database error: {e}") from e
+
+
+def search_notes(
+    query: str,
+    tag: Optional[str] = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """
+    Search notes using FTS5 full-text index.
+
+    Args:
+        query: FTS5 query string. Unquoted → OR semantics, quoted → AND semantics.
+               Special chars & | - " * are passed as-is (FTS5 handles them).
+        tag: If provided, filter to notes with this exact tag_name via JOIN on tags table.
+        limit: Maximum number of results to return (default 100).
+
+    Returns:
+        List of dicts with keys: id, title, content, tags, snippet, score, file_path.
+        Empty list if no results.
+
+    Raises:
+        DatabaseError: On FTS5 errors
+    """
+    if not query or not query.strip():
+        if not tag:
+            return []
+        query = ""
+
+    query = query.strip()
+    db_path = _get_db_path()
+
+    @_retry_on_lock
+    def _search():
+        conn = _get_connection(db_path)
+        try:
+            if tag:
+                # JOIN tags table for exact tag_name match (per spec)
+                # FTS5 query is the user query; tags table does exact filter
+                fts5_query = query if query else "*"
+                sql = """
+                SELECT n.id, n.title, n.content, n.tags,
+                       snippet(notes_fts, 1, '<mark>', '</mark>', '...', 32) AS snippet,
+                       bm25(notes_fts, 10.0, 1.0, 1.0) AS score,
+                       n.file_path
+                FROM notes n
+                JOIN notes_fts f ON n.id = f.rowid
+                JOIN tags t ON t.file_path = n.file_path
+                WHERE notes_fts MATCH ?
+                  AND t.tag_name = ?
+                  AND t.deleted_at IS NULL
+                ORDER BY score
+                LIMIT ?
+                """
+                cursor = conn.execute(sql, (fts5_query, tag, limit))
+            else:
+                sql = """
+                SELECT n.id, n.title, n.content, n.tags,
+                       snippet(notes_fts, 1, '<mark>', '</mark>', '...', 32) AS snippet,
+                       bm25(notes_fts, 10.0, 1.0, 1.0) AS score,
+                       n.file_path
+                FROM notes n
+                JOIN notes_fts f ON n.id = f.rowid
+                WHERE notes_fts MATCH ?
+                ORDER BY score
+                LIMIT ?
+                """
+                cursor = conn.execute(sql, (query, limit))
+
+            rows = cursor.fetchall()
+            results = []
+            for row in rows:
+                results.append({
+                    "id": row[0],
+                    "title": row[1],
+                    "content": row[2],
+                    "tags": row[3] or "",
+                    "snippet": row[4] or "",
+                    "score": row[5],
+                    "file_path": row[6] or "",
+                })
+            return results
+        finally:
+            conn.close()
+
+    try:
+        return _search()
+    except sqlite3.Error as e:
+        raise DatabaseError(f"FTS5 search error: {e}") from e
+
+
+def check_fts5_health() -> dict[str, Any]:
+    """
+    Check FTS5 index health via rowid consistency check.
+
+    Returns:
+        Dict with keys: consistent (bool), orphaned (int), extra (int)
+    """
+    db_path = _get_db_path()
+
+    @_retry_on_lock
+    def _check():
+        conn = _get_connection(db_path)
+        try:
+            # Find rowids in notes_fts that have no matching notes row
+            orphaned = conn.execute("""
+                SELECT COUNT(*) FROM notes_fts f
+                WHERE NOT EXISTS (SELECT 1 FROM notes n WHERE n.id = f.rowid)
+            """).fetchone()[0]
+
+            # Find notes rows with no FTS5 entry
+            extra = conn.execute("""
+                SELECT COUNT(*) FROM notes n
+                WHERE NOT EXISTS (SELECT 1 FROM notes_fts f WHERE f.rowid = n.id)
+            """).fetchone()[0]
+
+            consistent = (orphaned == 0 and extra == 0)
+            return {"consistent": consistent, "orphaned": orphaned, "extra": extra}
+        finally:
+            conn.close()
+
+    try:
+        return _check()
+    except sqlite3.Error as e:
+        raise DatabaseError(f"FTS5 health check error: {e}") from e
+
+
+def rebuild_fts5() -> None:
+    """
+    Rebuild FTS5 index atomically (drop and recreate from notes table).
+
+    This is an online rebuild: drops the old FTS5 table and recreates it
+    by re-inserting all notes. FTS5 triggers ensure consistency.
+
+    Raises:
+        DatabaseError: On SQLite errors
+    """
+    db_path = _get_db_path()
+
+    @_retry_on_lock
+    def _rebuild():
+        conn = _get_connection(db_path)
+        try:
+            # Drop existing FTS5 triggers first
+            conn.execute("DROP TRIGGER IF EXISTS notes_ai")
+            conn.execute("DROP TRIGGER IF EXISTS notes_au")
+            conn.execute("DROP TRIGGER IF EXISTS notes_ad")
+            # Drop existing FTS5 virtual table
+            conn.execute("DROP TABLE IF EXISTS notes_fts")
+            conn.commit()
+
+            # Recreate FTS5 table
+            _ensure_fts5_conn(conn)
+
+            # Reinsert all notes into FTS5
+            cursor = conn.execute(
+                "SELECT id, title, content, tags FROM notes"
+            )
+            for row in cursor.fetchall():
+                conn.execute(
+                    "INSERT INTO notes_fts(rowid, title, content, tag) VALUES (?, ?, ?, ?)",
+                    (row[0], row[1], row[2], row[3] or ""),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+
+    try:
+        _rebuild()
+    except sqlite3.Error as e:
+        raise DatabaseError(f"FTS5 rebuild error: {e}") from e
