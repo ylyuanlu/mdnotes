@@ -5,24 +5,23 @@ import subprocess
 import pytest
 
 
-UV = "/home/yuanlu/.local/bin/uv"
+# Use whichever `uv` is on PATH (CI runner installs it; local dev uses ~/.local/bin/uv).
+UV = "uv"
 
 
-def mdnotes_cmd(args, cwd=None, env=None):
+def mdnotes_cmd(args, cwd=None, env=None, input=None):
     """Run mdnotes CLI via uv and return (stdout, stderr, exit_code)."""
     base_env = dict(os.environ)
     if env:
         base_env.update(env)
-    # Ensure uv is on PATH for subprocess
-    if "/home/yuanlu/.local/bin" not in base_env.get("PATH", ""):
-        base_env["PATH"] = "/home/yuanlu/.local/bin:" + base_env.get("PATH", "")
     result = subprocess.run(
         [UV, "run", "mdnotes"] + args,
-        cwd=cwd or "/home/yuanlu/.openclaw/projects/mdnotes",
+        cwd=cwd or os.getcwd(),
         capture_output=True,
         text=True,
         encoding="utf-8",
         env=base_env,
+        input=input,
     )
     return result.stdout, result.stderr, result.returncode
 
@@ -211,20 +210,8 @@ class TestSearchCLI:
         }
         mdnotes_cmd(["add", str(test_vault / "a.md")], env=env)
         # Run reindex (confirmation via stdin)
-        base_env = dict(os.environ)
-        base_env.update(env)
-        if "/home/yuanlu/.local/bin" not in base_env.get("PATH", ""):
-            base_env["PATH"] = "/home/yuanlu/.local/bin:" + base_env.get("PATH", "")
-        result = subprocess.run(
-            [UV, "run", "mdnotes", "reindex"],
-            cwd="/home/yuanlu/.openclaw/projects/mdnotes",
-            input="y\n",
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            env=base_env,
-        )
-        assert result.returncode == 0, f"reindex failed: {result.stderr}"
+        _, err, code = mdnotes_cmd(["reindex"], env=env, input="y\n")
+        assert code == 0, f"reindex failed: {err}"
         # Search should still work
         out, err, code = mdnotes_cmd(["search", "v1"], env=env)
         assert code == 0
