@@ -4,6 +4,7 @@ import os
 import re
 import sqlite3
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -115,7 +116,18 @@ CREATE INDEX IF NOT EXISTS idx_tags_tag_name
 """)
     # Initialize FTS5 if not exists
     _ensure_fts5_conn(conn)
+    # v1.5 migration: ensure deleted_at column + index exist
+    _migrate_v15(conn)
     return conn
+
+
+def _migrate_v15(conn: sqlite3.Connection) -> None:
+    """v1.5 migration: add deleted_at column + idx_notes_deleted_at index."""
+    try:
+        conn.execute("ALTER TABLE notes ADD COLUMN deleted_at TEXT DEFAULT NULL")
+    except sqlite3.OperationalError:
+        pass  # column already exists
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_notes_deleted_at ON notes(deleted_at);")
 
 
 def _retry_on_lock(func):
@@ -161,6 +173,32 @@ class TagConflictError(Exception):
 class BackupError(Exception):
     """Raised when backup snapshot creation fails."""
     pass
+
+
+class ParamError(Exception):
+    """Raised for invalid CLI parameters or usage errors (exit code 2)."""
+    pass
+
+
+@dataclass
+class RestoreResult:
+    """Result of a restore_note() operation."""
+    success: bool
+    restored_id: int
+    conflict: bool = False
+    existing_note_id: Optional[int] = None
+    existing_title: Optional[str] = None
+    existing_updated_at: Optional[str] = None
+    conflicting_deleted_title: Optional[str] = None
+    conflicting_deleted_updated_at: Optional[str] = None
+
+
+@dataclass
+class PurgeResult:
+    """Result of a purge_deleted_notes() operation."""
+    deleted_count: int
+    batch_count: int
+    dry_run: bool
 
 
 # ---------------------------------------------------------------------------
@@ -732,7 +770,7 @@ def get_note(note_id: int) -> dict[str, Any]:
     conn = _get_connection(db_path)
     try:
         cursor = conn.execute(
-            "SELECT id, title, content, created_at, updated_at FROM notes WHERE id = ?",
+            "SELECT id, title, content, created_at, updated_at FROM notes WHERE id = ? AND deleted_at IS NULL",
             (note_id,),
         )
         row = cursor.fetchone()
@@ -778,13 +816,13 @@ def list_notes(
         if search:
             cursor = conn.execute(
                 f"SELECT id, title, content, created_at, updated_at "
-                f"FROM notes WHERE title LIKE ? ORDER BY {sort} {order.upper()}",
+                f"FROM notes WHERE deleted_at IS NULL AND title LIKE ? ORDER BY {sort} {order.upper()}",
                 (f"%{search}%",),
             )
         else:
             cursor = conn.execute(
                 f"SELECT id, title, content, created_at, updated_at "
-                f"FROM notes ORDER BY {sort} {order.upper()}",
+                f"FROM notes WHERE deleted_at IS NULL ORDER BY {sort} {order.upper()}",
             )
         rows = cursor.fetchall()
     finally:
@@ -804,49 +842,22 @@ def list_notes(
 
 def delete_note(note_id: int, force: bool = False) -> None:
     """
-    Physically delete a note by id and VACUUM the database.
+    Delete a note by id (default: soft-delete, v1.5+).
+
+    Default behavior is soft-delete (sets deleted_at). Use physical_delete_note()
+    for permanent removal.
 
     Args:
         note_id: Integer note id
         force: Ignored (kept for API compatibility)
 
     Raises:
-        NoteNotFoundError: If no note with this id exists (idempotent: exit 3)
+        NoteNotFoundError: If no note with this id exists
         ValueError: If note_id is not a valid integer
         DatabaseError: On SQLite error
     """
-    if not isinstance(note_id, int):
-        raise ValueError("id must be an integer")
-
-    db_path = _get_db_path()
-
-    @_retry_on_lock
-    def _delete():
-        conn = _get_connection(db_path)
-        try:
-            cursor = conn.execute(
-                "SELECT id FROM notes WHERE id = ?",
-                (note_id,),
-            )
-            row = cursor.fetchone()
-            if row is None:
-                conn.close()
-                raise NoteNotFoundError(f"Note {note_id} not found")
-            conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
-            conn.commit()
-            _check_integrity(conn)
-            # VACUUM to reclaim disk space
-            conn.execute("VACUUM")
-            conn.commit()
-        finally:
-            conn.close()
-
-    try:
-        _delete()
-    except NoteNotFoundError:
-        raise
-    except sqlite3.Error as e:
-        raise DatabaseError(f"Database error: {e}") from e
+    # v1.5: soft-delete by default
+    soft_delete_note(note_id)
 
 
 def count_notes() -> int:
@@ -882,6 +893,232 @@ def count_notes() -> int:
 
     try:
         return _count()
+    except sqlite3.Error as e:
+        raise DatabaseError(f"Database error: {e}") from e
+
+
+def soft_delete_note(note_id: int) -> None:
+    """
+    Soft-delete a note: set deleted_at = UTC NOW WHERE id = ? AND deleted_at IS NULL.
+
+    Idempotent: calling on an already-soft-deleted note succeeds silently.
+
+    Args:
+        note_id: Integer note id
+
+    Raises:
+        NoteNotFoundError: Note does not exist (or was already hard-deleted)
+        ValueError: note_id is not an integer
+        DatabaseError: On SQLite error
+    """
+    if not isinstance(note_id, int):
+        raise ValueError("note_id must be an integer")
+    db_path = _get_db_path()
+
+    @_retry_on_lock
+    def _soft_delete():
+        conn = _get_connection(db_path)
+        try:
+            # Update deleted_at; only affect notes that are not already soft-deleted
+            cursor = conn.execute(
+                "UPDATE notes SET deleted_at = datetime('now') "
+                "WHERE id = ? AND deleted_at IS NULL",
+                (note_id,),
+            )
+            conn.commit()
+            if cursor.rowcount == 0:
+                # Check if note exists at all (may have been hard-deleted)
+                row = conn.execute(
+                    "SELECT id, deleted_at FROM notes WHERE id = ?", (note_id,)
+                ).fetchone()
+                if row is None:
+                    conn.close()
+                    raise NoteNotFoundError(f"Note {note_id} not found")
+                # Note exists but was already soft-deleted → idempotent success
+        finally:
+            conn.close()
+
+    try:
+        _soft_delete()
+    except NoteNotFoundError:
+        raise
+    except sqlite3.Error as e:
+        raise DatabaseError(f"Database error: {e}") from e
+
+
+def physical_delete_note(note_id: int) -> None:
+    """
+    Physically delete a note: DELETE FROM notes WHERE id = ?.
+
+    Does not check deleted_at; can hard-delete a soft-deleted note.
+
+    Args:
+        note_id: Integer note id
+
+    Raises:
+        NoteNotFoundError: Note does not exist
+        ValueError: note_id is not an integer
+        DatabaseError: On SQLite error
+    """
+    if not isinstance(note_id, int):
+        raise ValueError("note_id must be an integer")
+    db_path = _get_db_path()
+
+    @_retry_on_lock
+    def _physical_delete():
+        conn = _get_connection(db_path)
+        try:
+            cursor = conn.execute("SELECT id FROM notes WHERE id = ?", (note_id,))
+            if cursor.fetchone() is None:
+                conn.close()
+                raise NoteNotFoundError(f"Note {note_id} not found")
+            conn.execute("DELETE FROM notes WHERE id = ?", (note_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+    try:
+        _physical_delete()
+    except NoteNotFoundError:
+        raise
+    except sqlite3.Error as e:
+        raise DatabaseError(f"Database error: {e}") from e
+
+
+def restore_note(note_id: int) -> RestoreResult:
+    """
+    Restore a soft-deleted note.
+
+    If an active note with the same title exists, returns a conflict result
+    without modifying the database.
+
+    Args:
+        note_id: Integer note id of the soft-deleted note
+
+    Returns:
+        RestoreResult with success=True on clean restore,
+        or success=False + conflict=True when there's a title clash.
+
+    Raises:
+        NoteNotFoundError: Note does not exist or is not soft-deleted
+        ValueError: note_id is not an integer
+        DatabaseError: On SQLite error
+    """
+    if not isinstance(note_id, int):
+        raise ValueError("note_id must be an integer")
+    db_path = _get_db_path()
+
+    @_retry_on_lock
+    def _restore():
+        conn = _get_connection(db_path)
+        try:
+            # Step 1: check the deleted note exists
+            row = conn.execute(
+                "SELECT id, title, updated_at FROM notes WHERE id = ? AND deleted_at IS NOT NULL",
+                (note_id,),
+            ).fetchone()
+            if row is None:
+                conn.close()
+                raise NoteNotFoundError(f"Note {note_id} not found or not soft-deleted")
+            deleted_title = row[1]
+            deleted_updated_at = row[2]
+
+            # Step 2: check for title conflict with active note
+            conflict_row = conn.execute(
+                "SELECT id, title, updated_at FROM notes "
+                "WHERE title = ? AND deleted_at IS NULL AND id != ?",
+                (deleted_title, note_id),
+            ).fetchone()
+
+            if conflict_row is not None:
+                conn.close()
+                return RestoreResult(
+                    success=False,
+                    restored_id=note_id,
+                    conflict=True,
+                    existing_note_id=conflict_row[0],
+                    existing_title=conflict_row[1],
+                    existing_updated_at=conflict_row[2],
+                    conflicting_deleted_title=deleted_title,
+                    conflicting_deleted_updated_at=deleted_updated_at,
+                )
+
+            # Step 3: clear deleted_at → restore
+            conn.execute(
+                "UPDATE notes SET deleted_at = NULL WHERE id = ?",
+                (note_id,),
+            )
+            conn.commit()
+            return RestoreResult(success=True, restored_id=note_id)
+        finally:
+            conn.close()
+
+    try:
+        return _restore()
+    except NoteNotFoundError:
+        raise
+    except sqlite3.Error as e:
+        raise DatabaseError(f"Database error: {e}") from e
+
+
+def purge_deleted_notes(confirm: bool = False, dry_run: bool = False) -> PurgeResult:
+    """
+    Batch physically delete all soft-deleted notes.
+
+    Args:
+        confirm: Must be True to actually delete; False raises ParamError.
+        dry_run: If True, only count and return without deleting.
+
+    Returns:
+        PurgeResult with deleted_count, batch_count, dry_run.
+
+    Raises:
+        ParamError: confirm=False when attempting real purge.
+        DatabaseError: On SQLite error.
+    """
+    if not confirm and not dry_run:
+        raise ParamError("purge requires --confirm flag")
+
+    db_path = _get_db_path()
+
+    @_retry_on_lock
+    def _purge():
+        conn = _get_connection(db_path)
+        try:
+            if dry_run:
+                count = conn.execute(
+                    "SELECT COUNT(*) FROM notes WHERE deleted_at IS NOT NULL"
+                ).fetchone()[0]
+                return PurgeResult(deleted_count=count, batch_count=0, dry_run=True)
+
+            # Real purge in batches of 500
+            BATCH_SIZE = 500
+            total_deleted = 0
+            batch = 0
+            while True:
+                deleted = conn.execute(
+                    "DELETE FROM notes WHERE id IN "
+                    "(SELECT id FROM notes WHERE deleted_at IS NOT NULL LIMIT ?)",
+                    (BATCH_SIZE,),
+                ).rowcount
+                if deleted == 0:
+                    break
+                total_deleted += deleted
+                batch += 1
+                time.sleep(0.01)  # 10ms between batches
+            conn.commit()
+            return PurgeResult(
+                deleted_count=total_deleted,
+                batch_count=batch,
+                dry_run=False,
+            )
+        finally:
+            conn.close()
+
+    try:
+        return _purge()
+    except ParamError:
+        raise
     except sqlite3.Error as e:
         raise DatabaseError(f"Database error: {e}") from e
 
@@ -991,8 +1228,50 @@ def set_note_tags(note_id: int, tags_string: str) -> None:
         raise DatabaseError(f"Database error: {e}") from e
 
 
+def _is_cjk_query(query: str) -> bool:
+    """Return True if query contains any CJK (Chinese/Japanese/Korean) characters."""
+    CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+    return bool(CJK_RE.search(query)) if query else False
+
+
+def _has_exact_quotes(query: str) -> bool:
+    """Return True if the entire query is wrapped in double quotes."""
+    stripped = query.strip()
+    return stripped.startswith('"') and stripped.endswith('"') and len(stripped) > 2
+
+
+def _build_tag_filter_sql(
+    tags: list[str], mode: str
+) -> tuple[str, tuple]:
+    """
+    Build SQL subquery for tag filtering via file_path (not note_id).
+
+    Returns (sql_fragment, params) for use in a WHERE file_path IN (...) clause.
+    mode "AND": notes must have ALL tags.
+    mode "OR": notes must have ANY of the tags.
+    """
+    n = len(tags)
+    placeholders = ",".join(["?"] * n)
+    if mode == "AND":
+        sql = f"""
+            SELECT file_path FROM tags
+            WHERE tag_name IN ({placeholders}) AND deleted_at IS NULL
+            GROUP BY file_path
+            HAVING COUNT(*) = ?
+        """
+        return sql, (*tags, n)
+    else:  # OR
+        sql = f"""
+            SELECT DISTINCT file_path FROM tags
+            WHERE tag_name IN ({placeholders}) AND deleted_at IS NULL
+        """
+        return sql, (*tags,)
+
+
 def search_notes(
     query: str,
+    tags: Optional[list[str]] = None,
+    tag_mode: str = "AND",
     tag: Optional[str] = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
@@ -1002,66 +1281,90 @@ def search_notes(
     Args:
         query: FTS5 query string. Unquoted → OR semantics, quoted → AND semantics.
                Special chars & | - " * are passed as-is (FTS5 handles them).
-        tag: If provided, filter to notes with this exact tag_name via JOIN on tags table.
+        tags: If provided, filter to notes with these tag names (via tags table JOIN).
+              Use tag_mode="AND" (default) for notes that have ALL tags,
+              or tag_mode="OR" for notes that have ANY of the tags.
+        tag_mode: "AND" (default) or "OR" — only meaningful when tags has >1 item.
+        tag: Legacy single-tag filter (equivalent to tags=[tag] with OR semantics
+             for backwards compatibility).
         limit: Maximum number of results to return (default 100).
 
     Returns:
         List of dicts with keys: id, title, content, tags, snippet, score, file_path.
-        Empty list if no results.
+        Empty list if no results. Includes cjk_hint when CJK query without quotes.
 
     Raises:
+        ParamError: More than 50 tags provided.
         DatabaseError: On FTS5 errors
     """
-    if not query or not query.strip():
-        if not tag:
-            return []
-        query = ""
+    MAX_TAGS = 50
+    _tags: list[str] = []
+    if tags:
+        if len(tags) > MAX_TAGS:
+            raise ParamError(f"too many tags (max {MAX_TAGS})")
+        _tags = list(tags)
+    elif tag:
+        _tags = [tag]
 
-    query = query.strip()
+    _query = query.strip() if query else ""
+    if not _query and not _tags:
+        return []
+
     db_path = _get_db_path()
+
+    # CJK hint logic
+    cjk_hint: Optional[str] = None
+    if _is_cjk_query(_query) and not _has_exact_quotes(_query):
+        cjk_hint = "中文模糊搜索已计划在 v1.6 实现，当前请使用精确匹配"
 
     @_retry_on_lock
     def _search():
         conn = _get_connection(db_path)
         try:
-            if tag:
-                # JOIN tags table for exact tag_name match (per spec)
-                # FTS5 query is the user query; tags table does exact filter
-                # When query is empty, use "" which FTS5 treats as match-nothing
-                # (the tag filter alone determines results)
-                fts5_query = query if query.strip() else ""
+            fts5_query = _query if _query else ""
+            has_tags_filter = bool(_tags)
+
+            if has_tags_filter:
+                tag_sql, tag_params = _build_tag_filter_sql(_tags, tag_mode)
+                # tags table uses file_path to link to notes
                 if fts5_query:
-                    sql = """
+                    # FTS5 text search + tag filter via file_path
+                    sql = f"""
                     SELECT n.id, n.title, n.content, n.tags,
                            snippet(notes_fts, 1, '<mark>', '</mark>', '...', 32) AS snippet,
                            bm25(notes_fts, 10.0, 1.0, 1.0) AS score,
                            n.file_path
                     FROM notes n
                     JOIN notes_fts f ON n.id = f.rowid
-                    JOIN tags t ON t.file_path = n.file_path
                     WHERE notes_fts MATCH ?
-                      AND t.tag_name = ?
-                      AND t.deleted_at IS NULL
+                      AND n.deleted_at IS NULL
+                      AND n.file_path IN (
+                          {tag_sql}
+                      )
                     ORDER BY score
                     LIMIT ?
                     """
-                    cursor = conn.execute(sql, (fts5_query, tag, limit))
+                    params = [fts5_query] + list(tag_params) + [limit]
+                    cursor = conn.execute(sql, params)
                 else:
-                    # Tag-only search (no text query): skip FTS5 MATCH, use tags table only
-                    sql = """
+                    # Tag-only search (no FTS5 query)
+                    sql = f"""
                     SELECT n.id, n.title, n.content, n.tags,
                            '' AS snippet,
                            0.0 AS score,
                            n.file_path,
                            n.created_at
                     FROM notes n
-                    JOIN tags t ON t.file_path = n.file_path
-                    WHERE t.tag_name = ?
-                      AND t.deleted_at IS NULL
+                    WHERE n.deleted_at IS NULL
+                      AND n.file_path IN (
+                          {tag_sql}
+                      )
                     LIMIT ?
                     """
-                    cursor = conn.execute(sql, (tag, limit))
-            else:
+                    params = list(tag_params) + [limit]
+                    cursor = conn.execute(sql, params)
+            elif fts5_query:
+                # FTS5-only search with deleted_at filter
                 sql = """
                 SELECT n.id, n.title, n.content, n.tags,
                        snippet(notes_fts, 1, '<mark>', '</mark>', '...', 32) AS snippet,
@@ -1070,15 +1373,30 @@ def search_notes(
                 FROM notes n
                 JOIN notes_fts f ON n.id = f.rowid
                 WHERE notes_fts MATCH ?
+                  AND n.deleted_at IS NULL
                 ORDER BY score
                 LIMIT ?
                 """
-                cursor = conn.execute(sql, (query, limit))
+                cursor = conn.execute(sql, (fts5_query, limit))
+            else:
+                # No FTS5 query, no tags → list all active notes
+                sql = """
+                SELECT n.id, n.title, n.content, n.tags,
+                       '' AS snippet,
+                       0.0 AS score,
+                       n.file_path,
+                       n.created_at
+                FROM notes n
+                WHERE n.deleted_at IS NULL
+                ORDER BY n.created_at DESC
+                LIMIT ?
+                """
+                cursor = conn.execute(sql, (limit,))
 
             rows = cursor.fetchall()
             results = []
             for row in rows:
-                results.append({
+                result = {
                     "id": row[0],
                     "title": row[1],
                     "content": row[2],
@@ -1087,10 +1405,32 @@ def search_notes(
                     "score": row[5],
                     "file_path": row[6] or "",
                     "created_at": row[7] if len(row) > 7 else None,
+                }
+                if cjk_hint:
+                    result["cjk_hint"] = cjk_hint
+                results.append(result)
+
+            # If CJK query with no results, return a minimal result with the hint
+            if cjk_hint and not results:
+                results.append({
+                    "id": 0,
+                    "title": "",
+                    "content": "",
+                    "tags": "",
+                    "snippet": "",
+                    "score": 0.0,
+                    "file_path": "",
+                    "created_at": None,
+                    "cjk_hint": cjk_hint,
                 })
             return results
         finally:
             conn.close()
+
+    try:
+        return _search()
+    except sqlite3.Error as e:
+        raise DatabaseError(f"FTS5 search error: {e}") from e
 
     try:
         return _search()

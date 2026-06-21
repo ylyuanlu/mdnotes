@@ -2,6 +2,7 @@
 
 import os
 import re
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -243,27 +244,45 @@ def show(id: str):
 
 @cli.command()
 @click.argument("id")
+@click.option("--physical", is_flag=True, help="Permanently delete (skip soft-delete)")
 @click.option("--force", is_flag=True, help="Skip confirmation prompt")
-def delete(id: str, force: bool):
-    """Delete a note by ID."""
+def delete(id: str, physical: bool, force: bool):
+    """
+    Delete a note by ID.
+
+    Default (no flag): soft-delete — note enters recycle bin, can be restored.
+    --physical: permanently delete (cannot be restored).
+    """
     try:
         note_id = int(id)
     except ValueError:
         click.echo("Error: id must be an integer", err=True)
         raise SystemExit(2)
 
-    # Check existence first for idempotent behavior
-    try:
-        storage.get_note(note_id)
-    except storage.NoteNotFoundError:
-        click.echo("Note not found", err=True)
-        raise SystemExit(3)
-    except storage.DatabaseError as e:
-        click.echo(f"Error: {e}", err=True)
-        raise SystemExit(1)
+    if physical:
+        # Physical delete: check existence without deleted_at filter
+        conn = storage._get_connection(storage._get_db_path())
+        row = conn.execute("SELECT id FROM notes WHERE id = ?", (note_id,)).fetchone()
+        conn.close()
+        if row is None:
+            click.echo("Note not found", err=True)
+            raise SystemExit(3)
+    else:
+        # Soft delete: check existence (including already-soft-deleted for idempotency)
+        conn = storage._get_connection(storage._get_db_path())
+        row = conn.execute("SELECT id, deleted_at FROM notes WHERE id = ?", (note_id,)).fetchone()
+        conn.close()
+        if row is None:
+            click.echo("Note not found", err=True)
+            raise SystemExit(3)
+        if row[1] is not None:
+            # Already soft-deleted → idempotent success (exit 0)
+            click.echo(f"Note {note_id} already deleted", err=True)
+            raise SystemExit(0)
 
     if not force:
-        click.echo(f"Delete note {note_id}? [y/N] ", err=True)
+        mode = "permanently" if physical else ""
+        click.echo(f"Delete note {note_id}{' ' + mode if mode else ''}? [y/N] ", err=True)
         try:
             response = input().strip().lower()
         except (EOFError, KeyboardInterrupt):
@@ -272,7 +291,10 @@ def delete(id: str, force: bool):
             raise SystemExit(0)
 
     try:
-        storage.delete_note(note_id)
+        if physical:
+            storage.physical_delete_note(note_id)
+        else:
+            storage.soft_delete_note(note_id)
     except storage.NoteNotFoundError:
         click.echo("Note not found", err=True)
         raise SystemExit(3)
@@ -298,6 +320,109 @@ def count():
         raise SystemExit(1)
 
     click.echo(f"Total notes: {n}")
+    raise SystemExit(0)
+
+
+@cli.command()
+@click.argument("id")
+def restore(id: str):
+    """
+    Restore a soft-deleted note.
+
+    If a note with the same title already exists, shows conflict info
+    and lets the user choose to overwrite or keep the existing note.
+
+    Examples:
+      mdnotes restore 42
+    """
+    try:
+        note_id = int(id)
+    except ValueError:
+        click.echo("Error: id must be an integer", err=True)
+        raise SystemExit(2)
+
+    try:
+        result = storage.restore_note(note_id)
+    except storage.NoteNotFoundError:
+        click.echo("Note not found or not soft-deleted", err=True)
+        raise SystemExit(3)
+    except storage.DatabaseError as e:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1)
+
+    if result.conflict:
+        click.echo("⚠️  Conflict: a note with the same title already exists", err=True)
+        click.echo(
+            f"  Deleted version: {result.conflicting_deleted_title} | "
+            f"modified {result.conflicting_deleted_updated_at}",
+            err=True,
+        )
+        click.echo(
+            f"  Existing note:   {result.existing_title} | "
+            f"modified {result.existing_updated_at}",
+            err=True,
+        )
+        click.echo(
+            "Choose: [overwrite] replace existing | [keep] cancel restore",
+            err=True,
+        )
+        try:
+            choice = input("> ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            choice = "keep"
+        if choice in ("overwrite", "y"):
+            # Overwrite: hard-delete the existing note, then restore
+            try:
+                storage.physical_delete_note(result.existing_note_id)
+                restore2 = storage.restore_note(note_id)
+                if restore2.success:
+                    click.echo(f"Restored note {note_id} (overwritten existing)", err=True)
+                    raise SystemExit(0)
+            except Exception:
+                click.echo("Restore failed", err=True)
+                raise SystemExit(1)
+        # keep
+        click.echo("Restore cancelled (kept existing note)", err=True)
+        raise SystemExit(4)
+
+    if result.success:
+        click.echo(f"Restored note {note_id}", err=True)
+        raise SystemExit(0)
+
+    # Should not reach here
+    click.echo("Restore failed", err=True)
+    raise SystemExit(1)
+
+
+@cli.command()
+@click.option("--confirm", is_flag=True, help="Confirm execution (required)")
+@click.option("--dry-run", is_flag=True, help="Preview count, do not delete")
+def purge(confirm: bool, dry_run: bool):
+    """
+    Permanently delete all soft-deleted notes.
+
+    Without --confirm: exits with error (required flag missing).
+    --dry-run: reports count of notes to be purged, no actual deletion.
+    --confirm: performs batch physical delete (500 notes per batch).
+
+    Examples:
+      mdnotes purge --dry-run
+      mdnotes purge --confirm
+    """
+    try:
+        result = storage.purge_deleted_notes(confirm=confirm, dry_run=dry_run)
+    except storage.ParamError as e:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(2)
+    except storage.DatabaseError as e:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1)
+
+    if result.dry_run:
+        click.echo(f"[dry-run] {result.deleted_count} note(s) would be purged.")
+        raise SystemExit(0)
+
+    click.echo(f"Purged {result.deleted_count} note(s) in {result.batch_count} batch(es).")
     raise SystemExit(0)
 
 
@@ -587,11 +712,13 @@ def _preprocess_query(raw_query: str) -> str:
 
 @cli.command()
 @click.argument("query", required=False)
-@click.option("--tag", "tag_filter", default=None, help="Filter by tag name (JOINs tags table)")
+@click.option("--tag", "tag_filter", multiple=True, help="Filter by tag (can repeat; AND by default)")
+@click.option("--or", "tag_or", is_flag=True, help="OR semantics for --tag (default is AND)")
+@click.option("--color", type=click.Choice(["auto", "always", "never"]), default="auto", help="Color output mode")
 @click.option("--limit", default=100, help="Max results (default 100)")
 @click.option("--check", "check_flag", is_flag=True, help="Check FTS5 index health")
 @click.option("--rebuild", "rebuild_flag", is_flag=True, help="Rebuild FTS5 index from notes table")
-def search(query: Optional[str], tag_filter: Optional[str], limit: int, check_flag: bool, rebuild_flag: bool):
+def search(query: Optional[str], tag_filter: tuple, tag_or: bool, color: str, limit: int, check_flag: bool, rebuild_flag: bool):
     """
     Search notes by keyword using FTS5 full-text index.
 
@@ -659,7 +786,13 @@ def search(query: Optional[str], tag_filter: Optional[str], limit: int, check_fl
             if tag_filter:
                 # Tag-only search with no text query → use search_notes with empty query
                 storage.ensure_fts5()
-                results = storage.search_notes("", tag=tag_filter, limit=limit)
+                tag_mode = "OR" if tag_or else "AND"
+                results = storage.search_notes(
+                    "",
+                    tags=list(tag_filter),
+                    tag_mode=tag_mode,
+                    limit=limit,
+                )
             else:
                 # No query, no tag → list all notes (ls behavior)
                 results = storage.list_notes(sort="created_at", order="desc")
@@ -684,14 +817,38 @@ def search(query: Optional[str], tag_filter: Optional[str], limit: int, check_fl
         raise SystemExit(2)
 
     try:
-        results = storage.search_notes(processed, tag=tag_filter, limit=limit)
+        tag_mode = "OR" if tag_or else "AND"
+        results = storage.search_notes(
+            processed,
+            tags=list(tag_filter) if tag_filter else None,
+            tag_mode=tag_mode,
+            limit=limit,
+        )
     except storage.DatabaseError as e:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(2)
+    except storage.ParamError as e:
         click.echo(f"Error: {e}", err=True)
         raise SystemExit(2)
 
     if not results:
         click.echo("No results found.", err=True)
         raise SystemExit(1)
+
+    # ANSI color rendering
+    ANSI_MARK_OPEN = "\x1b[1m"
+    ANSI_MARK_CLOSE = "\x1b[0m"
+
+    def _render_snippet(snippet: str, color_mode: str) -> str:
+        if color_mode == "never":
+            return snippet
+        elif color_mode == "always":
+            return snippet.replace("<mark>", ANSI_MARK_OPEN).replace("</mark>", ANSI_MARK_CLOSE)
+        else:  # auto
+            if sys.stdout.isatty():
+                return snippet.replace("<mark>", ANSI_MARK_OPEN).replace("</mark>", ANSI_MARK_CLOSE)
+            else:
+                return snippet
 
     # Display results
     for r in results:
@@ -706,9 +863,14 @@ def search(query: Optional[str], tag_filter: Optional[str], limit: int, check_fl
                 file_path = fp
         click.echo(f"{file_path}: {r['title']}")
         if snippet:
-            click.echo(f"  {snippet}")
+            rendered = _render_snippet(snippet, color)
+            click.echo(f"  {rendered}")
+            if color == "auto" and not sys.stdout.isatty():
+                click.echo("  (use less -R for color)", err=True)
         if tags_str:
             click.echo(f"  tags: {tags_str}")
+        if r.get("cjk_hint"):
+            click.echo(f"  💡 {r['cjk_hint']}", err=True)
 
     raise SystemExit(0)
 
