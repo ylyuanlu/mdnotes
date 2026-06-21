@@ -1,7 +1,7 @@
 # v1.5 soft-delete + search 优化 - 技术规范
 
 > **Task ID:** t_20260621_v150_032907
-> **适用版本**: v1.5.0+
+> **适用版本**: v1.5+
 > **作者:** Architect Agent
 > **依据:** PRD-05 (soft-delete) + PRD-06 (search optimization)
 > **创建时间:** 2026-06-21T09:17:00+08:00

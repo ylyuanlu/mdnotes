@@ -2,7 +2,7 @@
 
 > **日期**：2026-06-21
 > **状态**：Accepted
-> **适用版本**：v1.5.0+
+> **适用版本**：v1.5+
 > **决策者**：Architect Agent
 > **相关文档**：`docs/PRD/05-soft-delete.md` `docs/SPEC/05-06-soft-delete-search-v1.5.md`
 

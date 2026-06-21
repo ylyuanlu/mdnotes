@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [v1.5.0] — 2026-06-21
+## [v1.5] — 2026-06-21
 
 ### Added
 - **`delete [--physical]`**: `mdnotes delete <id>` now soft-deletes by default; `--physical` for permanent delete (breaking change from v1.4 physical-delete)
@@ -37,7 +37,7 @@ All notable changes to this project will be documented in this file.
 - test_storage_soft_delete.py: 26 tests ✅
 - test_cli_soft_delete.py: 18 tests ✅
 
-## [v1.0.1] — 2026-06-21
+## [v1.0] — 2026-06-21
 
 ### Fixed
 - **P95 latency**: `search` P95 从 183.6ms 降至 1.3ms（WAL + cache + mmap + idx_tags）
@@ -46,16 +46,16 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - **`tests/test_cli_search.py`**: 新增 46 个测试，cli.py coverage 72% → 85%（v0.5 决策 3 ≥80% gate pass）
-- **211 tests**: v1.0.1 全部通过 in 7.15s
+- **211 tests**: v1.0 全部通过 in 7.15s
 
 ### Technical Decisions
-- ADR-0005/ADR-0006 继承（v1.0.0 技术基础不变）
+- ADR-0005/ADR-0006 继承（v1.0 技术基础不变）
 
 ### Review Notes
 - Review verdict: pass（minor=3，不阻塞：tag-only search 无 ORDER BY / SPEC gap BC-1 / 46 vs 44 tests 数量差）
 - QA P95=79.93ms ✅（target ≤100ms）
 
-## [v1.0.0] — 2026-06-21
+## [v1.0] — 2026-06-21
 
 ### Added
 - **`search` CLI**: `mdnotes search <query>` FTS5 全文检索，支持 AND/OR 引号语义
@@ -84,7 +84,7 @@ All notable changes to this project will be documented in this file.
 - C-1 spec gap 已关闭：ADR-0005 + SPEC §Data Structures 已更新文档
 - C-2/C-3/C-4: 全部修复 ✅
 
-## [v0.1.0] — 2026-06-20
+## [v0.1] — 2026-06-20
 
 ### Added
 - **`tag rename` CLI**: `mdnotes tag rename <old> <new>` 支持 dry-run / --force / --ignore-missing / --glob / --exclude
@@ -102,7 +102,7 @@ All notable changes to this project will be documented in this file.
 - 132 tests pass（task 3 v2 第 6 次尝试通过）
 - Ruff: zero errors
 
-## [v0.1.0-mvp] — 2026-06-18
+## [v0.1] — 2026-06-18
 
 ### Added
 - **CRUD CLI**: `add`, `list`, `show`, `delete` commands via Click 8
@@ -119,7 +119,7 @@ All notable changes to this project will be documented in this file.
 - ADR-0002: SQLite WAL journal mode for concurrency
 - ADR-0003: DB path `~/.mdnotes.db` (user-level, not repo-level)
 
-## [v0.1.1] — 2026-06-19
+## [v0.1] — 2026-06-19
 
 ### Added
 - **`count` sub-command**: `mdnotes count` 输出 active notes 数量（`Total notes: N`）
